@@ -113,3 +113,29 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .tool-button { min-height: 56px; }
   .controls-hint { display: none; }
 }
+/* Correção do viewport 3D: o canvas precisa ocupar a área inteira. */
+.viewport-3d-wrap {
+  position: relative !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  background: #aeb8ba;
+}
+#builder-viewport {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 2px;
+  min-height: 2px;
+}
+#builder-viewport canvas {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  touch-action: none;
+}
