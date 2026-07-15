@@ -1,0 +1,18 @@
+CORREÇÃO DO ERRO NPM NA VERCEL
+
+Substitua no GitHub:
+- package.json
+- package-lock.json
+
+Adicione também:
+- .npmrc
+- .nvmrc
+
+Na Vercel:
+Framework Preset: Vite
+Install Command: deixe em branco (Default)
+Build Command: npm run build
+Output Directory: dist
+Node.js Version: 22.x
+
+Depois faça um novo deploy sem cache.
