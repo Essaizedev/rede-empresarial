@@ -1,0 +1,27 @@
+CORREÇÃO DA TELA BRANCA
+
+Substitua todos os arquivos do repositório pelos arquivos desta pasta,
+ou substitua pelo menos:
+
+- index.html
+- vite.config.js
+- vercel.json
+- src/main.js
+- src/multiplayer.js
+
+Depois faça Commit changes no GitHub.
+
+Na Vercel:
+1. Abra Deployments.
+2. Abra o menu do último deploy.
+3. Escolha Redeploy.
+4. Desative o uso do cache, se essa opção aparecer.
+
+Configuração:
+Framework Preset: Vite
+Build Command: npm run build
+Output Directory: dist
+Install Command: padrão/automático
+
+A nova versão mostra uma mensagem de erro na própria tela caso algum
+JavaScript falhe, em vez de exibir somente uma página branca.
