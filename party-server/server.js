@@ -2,73 +2,82 @@ export default class Server {
   constructor(room) {
     this.room = room;
     this.players = new Map();
+    this.scene = [];
+  }
+
+  async onStart() {
+    this.scene = (await this.room.storage.get('scene')) || [];
   }
 
   onConnect(connection) {
     connection.send(JSON.stringify({
       type: 'snapshot',
+      scene: this.scene,
       players: [...this.players.values()],
     }));
   }
 
-  onMessage(message, sender) {
-    if (typeof message !== 'string' || message.length > 4096) return;
-    let data;
+  async onMessage(rawMessage, sender) {
+    let message;
     try {
-      data = JSON.parse(message);
+      message = JSON.parse(rawMessage);
     } catch {
       return;
     }
 
-    if (data.type === 'join') {
-      const player = this.sanitizePlayer(data, sender.id);
-      this.players.set(sender.id, player);
-      sender.setState?.({ playerId: player.id, name: player.name });
-      this.room.broadcast(JSON.stringify({ type: 'player-joined', player }), [sender.id]);
-      sender.send(JSON.stringify({ type: 'snapshot', players: [...this.players.values()] }));
+    if (message.type === 'publish_scene' && Array.isArray(message.scene)) {
+      this.scene = message.scene;
+      await this.room.storage.put('scene', this.scene);
+      sender.send(JSON.stringify({ type: 'published' }));
+      this.room.broadcast(JSON.stringify({ type: 'scene_published', scene: this.scene }), [sender.id]);
       return;
     }
 
-    if (data.type === 'move') {
-      const current = this.players.get(sender.id);
-      if (!current) return;
-      const player = this.sanitizePlayer({ ...current, ...data }, current.id);
+    if (message.type === 'join' && message.player) {
+      const player = {
+        id: message.player.id || sender.id,
+        name: String(message.player.name || 'Visitante').slice(0, 28),
+        color: Number(message.player.color || 0x397bc5),
+        x: 0,
+        z: 12,
+        ry: 0,
+      };
       this.players.set(sender.id, player);
-      this.room.broadcast(JSON.stringify({ type: 'player-moved', player }), [sender.id]);
+      sender.send(JSON.stringify({
+        type: 'snapshot',
+        scene: this.scene,
+        players: [...this.players.values()],
+      }));
+      this.room.broadcast(JSON.stringify({ type: 'player_joined', player }), [sender.id]);
+      return;
+    }
+
+    if (message.type === 'move' && message.player) {
+      const existing = this.players.get(sender.id);
+      if (!existing) return;
+      const player = {
+        ...existing,
+        x: Number(message.player.x || 0),
+        z: Number(message.player.z || 0),
+        ry: Number(message.player.ry || 0),
+      };
+      this.players.set(sender.id, player);
+      this.room.broadcast(JSON.stringify({ type: 'player_moved', player }), [sender.id]);
+      return;
+    }
+
+    if (message.type === 'door') {
+      this.room.broadcast(JSON.stringify({
+        type: 'door',
+        objectId: message.objectId,
+        open: Boolean(message.open),
+      }), [sender.id]);
     }
   }
 
   onClose(connection) {
     const player = this.players.get(connection.id);
     this.players.delete(connection.id);
-    if (player) {
-      this.room.broadcast(JSON.stringify({ type: 'player-left', id: player.id }));
-    }
-  }
-
-  onError(connection) {
-    this.onClose(connection);
-  }
-
-  sanitizePlayer(data, fallbackId) {
-    return {
-      id: this.cleanText(data.id, fallbackId, 80),
-      name: this.cleanText(data.name, 'Visitante', 28),
-      color: this.cleanNumber(data.color, 0, 0xffffff, 0x397bc5),
-      x: this.cleanNumber(data.x, -15, 15, 0),
-      z: this.cleanNumber(data.z, -15, 15, 11),
-      ry: this.cleanNumber(data.ry, -Math.PI * 4, Math.PI * 4, 0),
-    };
-  }
-
-  cleanText(value, fallback, maxLength) {
-    const text = typeof value === 'string' ? value.trim() : '';
-    return (text || fallback).slice(0, maxLength);
-  }
-
-  cleanNumber(value, min, max, fallback) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return fallback;
-    return Math.min(max, Math.max(min, number));
+    if (player) this.room.broadcast(JSON.stringify({ type: 'player_left', id: player.id }));
   }
 }
