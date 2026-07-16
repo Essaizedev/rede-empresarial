@@ -1,0 +1,11 @@
+CORREÇÃO: CLIQUES SEM TEMPO DE ESPERA
+
+- Removida a contagem regressiva do Pointer Lock.
+- Nenhum clique exibe mais "Aguarde".
+- Pressionar Esc apenas libera o mouse.
+- Para continuar, basta clicar na área 3D.
+- Fechar a janela de equipamento não tenta capturar o mouse automaticamente.
+- Não existe atraso artificial entre liberar e recapturar o mouse.
+
+Atualização rápida:
+substitua somente src/main.js e faça Commit changes.

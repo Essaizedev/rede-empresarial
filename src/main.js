@@ -173,6 +173,7 @@ app.innerHTML = `
         <input id="publishRoom" maxlength="50" placeholder="Código da sala" />
         <input id="publishPin" maxlength="30" type="password" placeholder="Senha de edição" />
         <button id="publishScene" class="primary">Publicar</button>
+        <button id="deleteRoom" class="delete" title="Excluir permanentemente esta sala">Excluir sala</button>
       </div>
     </header>
 
@@ -430,6 +431,7 @@ const vehicleName = $('#vehicleName');
 const vehicleSpeed = $('#vehicleSpeed');
 const joinButton = $('#joinRoomButton');
 const publishButton = $('#publishScene');
+const deleteRoomButton = $('#deleteRoom');
 
 const avatarInputs = {
   bodyType: $('#avatarBodyType'),
@@ -453,6 +455,7 @@ if (!supabase) {
   $('#onlineWarning').textContent = supabaseInitError || 'Configure VITE_SUPABASE_URL e VITE_SUPABASE_PUBLISHABLE_KEY na Vercel.';
   joinButton.disabled = true;
   publishButton.disabled = true;
+  deleteRoomButton.disabled = true;
 }
 
 let savedPerformance = {};
@@ -510,8 +513,6 @@ mapControls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
 
 const pointerControls = new PointerLockControls(gameCamera, renderer.domElement);
 pointerControls.pointerSpeed = initialSensitivity;
-const POINTER_LOCK_COOLDOWN_MS = 850;
-let lastPointerUnlockAt = -Infinity;
 let pointerLockPending = false;
 let gameReturnMode = 'home';
 let activeBuilderCamera = topCamera;
@@ -659,11 +660,14 @@ let currentRoom = '';
 let localPlayer = null;
 let lastMoveSent = 0;
 let lastPresenceSent = 0;
+let lastRemoteSweep = 0;
 let toastTimer = null;
 let interactionRoot = null;
 let canvasPointerStart = null;
 let canvasPointerMoved = false;
 const remotePlayers = new Map();
+const remotePlayerLastSeen = new Map();
+const explicitlyDepartedPlayers = new Set();
 const keys = new Set();
 let staticCollisionBoxes = [];
 let dynamicCollisionRoots = [];
@@ -1726,33 +1730,22 @@ async function requestGamePointerLock() {
   if (appMode !== 'game' || pointerControls.isLocked || pointerLockPending) return false;
   if ($('#equipmentModal')?.classList.contains('open')) return false;
 
-  const elapsedSinceUnlock = performance.now() - lastPointerUnlockAt;
-  if (elapsedSinceUnlock < POINTER_LOCK_COOLDOWN_MS) {
-    const remaining = Math.ceil((POINTER_LOCK_COOLDOWN_MS - elapsedSinceUnlock) / 100) / 10;
-    setPointerLockHint(true, `Aguarde ${remaining.toFixed(1).replace('.', ',')} s e clique novamente`);
-    return false;
-  }
-
   pointerLockPending = true;
   try {
     let result;
     try {
       result = renderer.domElement.requestPointerLock({ unadjustedMovement: true });
       if (result?.then) await result;
-    } catch (firstError) {
-      if (isRecoverablePointerLockError(firstError)) throw firstError;
+    } catch {
       result = renderer.domElement.requestPointerLock();
       if (result?.then) await result;
     }
     return true;
   } catch (error) {
-    console.warn('Não foi possível capturar o mouse:', error);
-    if (isRecoverablePointerLockError(error)) {
-      lastPointerUnlockAt = performance.now();
-      setPointerLockHint(true, 'O mouse acabou de ser liberado. Clique novamente em um instante.');
-    } else {
-      setPointerLockHint(true, 'Clique novamente para controlar o personagem.');
-    }
+    // Alguns navegadores podem recusar uma captura isolada. Não mostramos
+    // contagem regressiva nem bloqueamos os cliques seguintes.
+    console.warn('Não foi possível capturar o mouse neste clique:', error);
+    setPointerLockHint(true, 'Clique na tela para controlar o personagem');
     return false;
   } finally {
     pointerLockPending = false;
@@ -1830,7 +1823,11 @@ function openEquipment(meta) {
 
 function closeEquipment() {
   $('#equipmentModal').classList.remove('open');
-  if (appMode === 'game') requestGamePointerLock();
+  if (appMode === 'game') {
+    // Não tenta prender o mouse automaticamente logo após o navegador soltá-lo.
+    // O próximo clique na área 3D retoma o controle imediatamente.
+    setPointerLockHint(true, 'Clique na tela para continuar');
+  }
 }
 
 function makeRemoteAvatar(player) {
@@ -1845,7 +1842,8 @@ function makeRemoteAvatar(player) {
 }
 
 function upsertRemote(player) {
-  if (!player?.id || player.id === localPlayer?.id) return;
+  if (!player?.id || player.id === localPlayer?.id || explicitlyDepartedPlayers.has(player.id)) return;
+  remotePlayerLastSeen.set(player.id, performance.now());
   let avatar = remotePlayers.get(player.id);
   if (!avatar) {
     avatar = makeRemoteAvatar(player);
@@ -1869,6 +1867,7 @@ function removeRemote(id) {
   avatarLayer.remove(avatar);
   disposeRoot(avatar);
   remotePlayers.delete(id);
+  remotePlayerLastSeen.delete(id);
   updatePlayersList();
 }
 
@@ -1878,6 +1877,8 @@ function clearAvatars() {
     disposeRoot(avatar);
   }
   remotePlayers.clear();
+  remotePlayerLastSeen.clear();
+  explicitlyDepartedPlayers.clear();
   updatePlayersList();
 }
 
@@ -1892,11 +1893,17 @@ function flattenPresenceState(state) {
   return Object.values(state || {}).flatMap((entries) => Array.isArray(entries) ? entries : []);
 }
 
+function markPlayerLeft(id) {
+  if (!id || id === localPlayer?.id) return;
+  explicitlyDepartedPlayers.add(id);
+  removeRemote(id);
+}
+
 function syncPresencePlayers() {
   if (!realtimeChannel) return;
   const seen = new Set();
   for (const player of flattenPresenceState(realtimeChannel.presenceState())) {
-    if (!player?.id || player.id === localPlayer?.id) continue;
+    if (!player?.id || player.id === localPlayer?.id || explicitlyDepartedPlayers.has(player.id)) continue;
     seen.add(player.id);
     upsertRemote(player);
   }
@@ -2018,13 +2025,44 @@ function updateDrivenVehicle(delta) {
   return Math.abs(speed) > 0.12;
 }
 
-function disconnectRealtime() {
+function disconnectRealtime({ announce = true } = {}) {
   const oldChannel = realtimeChannel;
+  const oldPlayer = localPlayer;
   realtimeChannel = null;
   currentRoom = '';
-  if (oldChannel && supabase) supabase.removeChannel(oldChannel).catch(() => {});
+
+  if (oldChannel && supabase) {
+    // A interface sai imediatamente. A limpeza online continua sem bloquear a tela.
+    void (async () => {
+      if (announce && oldPlayer?.id) {
+        const leaveSignal = oldChannel.send({
+          type: 'broadcast',
+          event: 'player_left',
+          payload: { id: oldPlayer.id, leftAt: Date.now() },
+        });
+        const untrackSignal = typeof oldChannel.untrack === 'function' ? oldChannel.untrack() : Promise.resolve();
+        await Promise.race([
+          Promise.allSettled([leaveSignal, untrackSignal]),
+          new Promise((resolve) => setTimeout(resolve, 220)),
+        ]);
+      }
+      await supabase.removeChannel(oldChannel).catch(() => {});
+    })();
+  }
+
   clearAvatars();
   localPlayer = null;
+}
+
+function announcePageExit(event) {
+  if (event?.type === 'pagehide' && event.persisted) return;
+  const channel = realtimeChannel;
+  const player = localPlayer;
+  if (!channel || !player?.id) return;
+  // Envia imediatamente antes de fechar/recarregar a página. O navegador pode
+  // interromper a aba a qualquer momento, por isso não aguardamos a Promise.
+  channel.send({ type: 'broadcast', event: 'player_left', payload: { id: player.id, leftAt: Date.now() } }).catch(() => {});
+  channel.untrack?.().catch(() => {});
 }
 
 async function loadPublishedScene(room) {
@@ -2076,6 +2114,7 @@ async function joinOnline(name, room) {
     .on('presence', { event: 'leave' }, syncPresencePlayers)
     .on('broadcast', { event: 'player_state' }, ({ payload }) => upsertRemote(payload))
     .on('broadcast', { event: 'player_move' }, ({ payload }) => upsertRemote(payload))
+    .on('broadcast', { event: 'player_left' }, ({ payload }) => markPlayerLeft(payload?.id))
     .on('broadcast', { event: 'request_state' }, ({ payload }) => {
       if (localPlayer && payload?.requesterId !== localPlayer.id) broadcast('player_state', localPlayer).catch(() => {});
     })
@@ -2092,6 +2131,12 @@ async function joinOnline(name, room) {
         rebuildGameCaches();
         showToast('O cenário foi atualizado.');
       }
+    })
+    .on('broadcast', { event: 'room_deleted' }, () => {
+      $('#onlineWarning').textContent = 'Essa sala foi excluída pelo responsável.';
+      showToast('A sala foi excluída.');
+      disconnectRealtime({ announce: false });
+      showHome();
     })
     .subscribe(async (status, error) => {
       if (status === 'SUBSCRIBED') {
@@ -2145,6 +2190,38 @@ async function publishCurrentScene(room, pin) {
   });
   publishButton.disabled = false;
   setBuilderStatus(`Cenário publicado na sala ${normalizedRoom}.`);
+}
+
+async function deletePublishedRoom(room, pin) {
+  if (!supabase) return;
+  const normalizedRoom = normalizeRoom(room);
+  if (!normalizedRoom) return setBuilderStatus('Digite o código da sala que será excluída.');
+  if (String(pin || '').length < 4) return setBuilderStatus('Digite a senha de edição da sala.');
+  if (!confirm(`Excluir permanentemente a sala "${normalizedRoom}"? Essa ação não pode ser desfeita.`)) return;
+
+  deleteRoomButton.disabled = true;
+  setBuilderStatus('Excluindo sala...');
+  const { error } = await supabase.rpc('delete_scene', { p_room: normalizedRoom, p_pin: pin });
+
+  if (error) {
+    deleteRoomButton.disabled = false;
+    const needsSql = /function|schema cache|delete_scene/i.test(error.message || '');
+    setBuilderStatus(needsSql
+      ? 'A função de exclusão ainda não existe. Execute o arquivo supabase-atualizacao-v3.sql no Supabase.'
+      : `Erro ao excluir: ${error.message}`);
+    return;
+  }
+
+  const publisher = supabase.channel(`empresa3d:${normalizedRoom}`, { config: { private: false, broadcast: { self: false } } });
+  publisher.subscribe(async (status) => {
+    if (status !== 'SUBSCRIBED') return;
+    await publisher.send({ type: 'broadcast', event: 'room_deleted', payload: { room: normalizedRoom } }).catch(() => {});
+    await supabase.removeChannel(publisher).catch(() => {});
+  });
+
+  if (localStorage.getItem('empresa3d-room') === normalizedRoom) localStorage.removeItem('empresa3d-room');
+  deleteRoomButton.disabled = false;
+  setBuilderStatus(`Sala ${normalizedRoom} excluída permanentemente.`);
 }
 
 function startSoloGame() {
@@ -2320,6 +2397,7 @@ $('#undoAction').addEventListener('click', undo);
 $('#redoAction').addEventListener('click', redo);
 $('#saveProject').addEventListener('click', saveLocalVersion);
 $('#publishScene').addEventListener('click', () => publishCurrentScene($('#publishRoom').value, $('#publishPin').value));
+$('#deleteRoom').addEventListener('click', () => deletePublishedRoom($('#publishRoom').value, $('#publishPin').value));
 $('#joinRoomButton').addEventListener('click', () => {
   const name = $('#joinName').value.trim() || 'Visitante';
   const room = normalizeRoom($('#joinRoom').value);
@@ -2512,6 +2590,8 @@ function preventBrowserCommandWhilePlaying(event) {
 addEventListener('keydown', preventBrowserCommandWhilePlaying, { capture: true });
 addEventListener('keyup', preventBrowserCommandWhilePlaying, { capture: true });
 addEventListener('blur', () => keys.clear());
+addEventListener('pagehide', announcePageExit, { capture: true });
+addEventListener('beforeunload', announcePageExit, { capture: true });
 document.addEventListener('visibilitychange', () => { if (document.hidden) keys.clear(); });
 document.addEventListener('pointerlockchange', () => {
   if (appMode !== 'game') return;
@@ -2519,8 +2599,7 @@ document.addEventListener('pointerlockchange', () => {
     setPointerLockHint(false);
   } else {
     keys.clear();
-    lastPointerUnlockAt = performance.now();
-    setPointerLockHint(true, 'Mouse liberado. Clique na tela para continuar.');
+    setPointerLockHint(true, 'Clique na tela para continuar');
   }
 });
 
@@ -2598,6 +2677,14 @@ function animate() {
     updateFirstPersonBody(delta, moving);
 
     const now = performance.now();
+    if (realtimeChannel && now - lastRemoteSweep > 750) {
+      // Fallback para quedas bruscas de conexão. Saídas normais são removidas
+      // quase imediatamente pelo evento player_left e pelo Presence leave.
+      for (const [id, lastSeen] of remotePlayerLastSeen) {
+        if (now - lastSeen > 5000) removeRemote(id);
+      }
+      lastRemoteSweep = now;
+    }
     const moveSendInterval = settings.quality === 'low' ? 110 : settings.quality === 'medium' ? 90 : 70;
     if (realtimeChannel && localPlayer && now - lastMoveSent > moveSendInterval) {
       const look = new THREE.Vector3();

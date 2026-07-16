@@ -1,0 +1,10 @@
+CORREÇÃO DE PRESENÇA E EXCLUSÃO DE SALAS
+
+- Saída normal envia player_left imediatamente.
+- Presence untrack é chamado antes de remover o canal.
+- pagehide/beforeunload tentam avisar ao fechar ou recarregar a aba.
+- Jogadores sem atualização por 5 segundos são removidos como fallback.
+- Adicionado botão Excluir sala, protegido pela senha de edição.
+- Salas conectadas recebem aviso e são encerradas ao serem excluídas.
+
+Execute supabase-atualizacao-v3.sql uma única vez no Supabase.

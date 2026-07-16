@@ -80,7 +80,7 @@ canvas.webgl { position: fixed; inset: 0; display: block; z-index: 0; }
 .topbar-group { display: flex; padding: 3px; border-radius: 10px; background: #39443d; }
 .topbar-group button { padding: 7px 9px; color: #dce4de; background: transparent; }
 .topbar-group button.active { color: #24271e; background: var(--primary); }
-.room-mini { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.room-mini { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; }
 .room-mini input { width: 138px; }
 #publishPin { width: 125px; }
 #importFile, #planFile { display: none; }
@@ -223,3 +223,5 @@ body.game-keyboard-captured canvas.webgl { outline: none; }
 #vehicleHud.hidden { display: none; }
 #vehicleHud #vehicleSpeed { color: #f0dc75; font-size: 20px; font-weight: 900; }
 #vehicleHud small { flex-basis: 100%; color: #cbd5cd; }
+
+.room-mini .delete { white-space: nowrap; }
