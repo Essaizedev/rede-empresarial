@@ -1,8 +1,47 @@
 import * as THREE from 'three';
 import { createClient } from '@supabase/supabase-js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { MapControls } from 'three/addons/controls/MapControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import {
+  AVATAR_OPTIONS,
+  DEFAULT_AVATAR,
+  applyAvatarState,
+  createAvatar,
+  sanitizeAvatar,
+  updateAvatar,
+} from './avatar.js';
+import {
+  NETWORK_KINDS,
+  OPENING_KINDS,
+  SEGMENT_KINDS,
+  applyObjectColor,
+  applySegmentTransform,
+  createCable,
+  createObject,
+  createObjectFromData,
+  createRoad,
+  createSidewalk,
+  createWall,
+  detachOpening,
+  disposeRoot,
+  finalizeLoadedWorld,
+  findNearestWall,
+  getFirstColor,
+  getSegmentInfo,
+  networkValidation,
+  objectLabel,
+  rebuildSegment,
+  rebuildWall,
+  resizeObject,
+  serializeObject,
+  setOpeningOpen,
+  snapOpeningToWall,
+  snapshotSegment,
+  updateAllCables,
+  updateOpeningAnimation,
+} from './objects.js';
 import './style.css';
 
 const app = document.querySelector('#app');
@@ -12,71 +51,73 @@ function showFatalError(message) {
   if (!box) {
     box = document.createElement('div');
     box.id = 'fatalError';
-    box.style.cssText = [
-      'position:fixed',
-      'inset:20px',
-      'z-index:9999',
-      'overflow:auto',
-      'padding:18px',
-      'border-radius:14px',
-      'background:#4b1717',
-      'color:#fff',
-      'font:16px/1.45 system-ui,sans-serif',
-      'box-shadow:0 20px 70px #0008'
-    ].join(';');
     document.body.appendChild(box);
   }
   box.textContent = `Erro ao abrir o site: ${message}`;
 }
 
-window.addEventListener('error', (event) => {
-  showFatalError(event.error?.message || event.message || 'erro desconhecido');
-});
+window.addEventListener('error', (event) => showFatalError(event.error?.message || event.message || 'erro desconhecido'));
+window.addEventListener('unhandledrejection', (event) => showFatalError(event.reason?.message || String(event.reason || 'erro desconhecido')));
 
-window.addEventListener('unhandledrejection', (event) => {
-  showFatalError(event.reason?.message || String(event.reason || 'erro desconhecido'));
-});
-
-const SUPABASE_URL = String(import.meta.env.VITE_SUPABASE_URL || '').trim();
-const SUPABASE_PUBLISHABLE_KEY = String(
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || '',
-).trim();
-
+const SUPABASE_URL = String(import.meta.env.VITE_SUPABASE_URL || '').trim().replace(/\/$/, '');
+const SUPABASE_KEY = String(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
 let supabase = null;
 let supabaseInitError = '';
 
-if (SUPABASE_URL || SUPABASE_PUBLISHABLE_KEY) {
+if (SUPABASE_URL || SUPABASE_KEY) {
   try {
-    if (!SUPABASE_URL.startsWith('https://') || !SUPABASE_URL.endsWith('.supabase.co')) {
-      throw new Error('VITE_SUPABASE_URL inválida. Use o endereço https://...supabase.co, sem aspas.');
+    if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(SUPABASE_URL)) {
+      throw new Error('VITE_SUPABASE_URL inválida. Use apenas https://...supabase.co, sem /rest/v1.');
     }
-    if (!SUPABASE_PUBLISHABLE_KEY.startsWith('sb_publishable_')) {
-      throw new Error('VITE_SUPABASE_PUBLISHABLE_KEY inválida. Use a Publishable key que começa com sb_publishable_.');
+    if (!(SUPABASE_KEY.startsWith('sb_publishable_') || SUPABASE_KEY.startsWith('eyJ'))) {
+      throw new Error('A chave pública do Supabase não parece válida.');
     }
-
-    supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+    supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-      realtime: { params: { eventsPerSecond: 20 } },
+      realtime: { params: { eventsPerSecond: 25 } },
     });
   } catch (error) {
     supabaseInitError = error instanceof Error ? error.message : String(error);
   }
 }
 
+const hairOptions = AVATAR_OPTIONS.hairStyles.map((item) => `<option value="${item.value}">${item.label}</option>`).join('');
+
 app.innerHTML = `
   <section id="homeOverlay" class="overlay">
     <div class="home-card">
-      <h1>Empresa 3D</h1>
-      <p>Não existe cadastro nem login. Escolha construir individualmente ou entrar em uma sala informando somente seu nome e o código da sala.</p>
+      <div class="home-title">
+        <div>
+          <span class="eyebrow">SIMULADOR DE REDES E AMBIENTES</span>
+          <h1>Empresa 3D Inteligente</h1>
+          <p>Construa com precisão, publique uma sala e explore com outras pessoas. Não existe cadastro para visitantes.</p>
+        </div>
+        <div id="avatarPreview" aria-label="Prévia do avatar"></div>
+      </div>
+
+      <div class="avatar-editor">
+        <div class="avatar-editor-title">
+          <strong>Personalize seu avatar</strong>
+          <span>Essa aparência será vista pelos colegas.</span>
+        </div>
+        <label>Tom de pele<input id="avatarSkin" type="color" /></label>
+        <label>Cabelo<select id="avatarHairStyle">${hairOptions}</select></label>
+        <label>Cor do cabelo<input id="avatarHair" type="color" /></label>
+        <label>Camisa<input id="avatarShirt" type="color" /></label>
+        <label>Calça<input id="avatarPants" type="color" /></label>
+        <label>Calçado<input id="avatarShoes" type="color" /></label>
+      </div>
+
       <div class="home-grid">
         <article class="choice-card">
+          <div class="choice-icon">⌂</div>
           <h2>Construir sozinho</h2>
-          <p>Monte paredes, portas, móveis e pontos de rede. O rascunho fica salvo neste navegador e só vai para o online quando você clicar em publicar.</p>
-          <button id="openBuilder" class="primary wide">Abrir construtor 3D</button>
+          <p>Use vista superior, encaixes inteligentes, medidas precisas, paredes com aberturas reais, ruas, portões e equipamentos de rede.</p>
+          <button id="openBuilder" class="primary wide">Abrir construtor</button>
         </article>
         <article class="choice-card">
+          <div class="choice-icon">◎</div>
           <h2>Entrar em uma sala</h2>
-          <p>Os visitantes não precisam de conta. Digite um nome e o mesmo código de sala usado pela turma.</p>
           <div class="field"><label for="joinName">Seu nome</label><input id="joinName" maxlength="28" placeholder="Ex.: Ingrid" /></div>
           <div class="field"><label for="joinRoom">Código da sala</label><input id="joinRoom" maxlength="50" placeholder="Ex.: turma-0123" /></div>
           <button id="joinRoomButton" class="primary wide">Entrar na sala</button>
@@ -88,526 +129,1080 @@ app.innerHTML = `
 
   <section id="builderUi" class="hidden">
     <header id="builderTopbar">
-      <span class="title">Construtor 3D</span>
-      <button id="homeFromBuilder" class="secondary">Início</button>
-      <button id="soloTest" class="secondary">Testar sozinho</button>
-      <button id="saveProject" class="secondary">Salvar</button>
+      <span class="title">Empresa 3D</span>
+      <button id="homeFromBuilder" class="icon-button" title="Início">⌂</button>
+      <div class="topbar-group view-switch">
+        <button id="topView" class="active">Vista superior</button>
+        <button id="perspectiveView">Vista 3D</button>
+      </div>
+      <button id="soloTest" class="secondary">Testar cenário</button>
+      <button id="undoAction" class="secondary" title="Desfazer (Ctrl+Z)">↶</button>
+      <button id="redoAction" class="secondary" title="Refazer (Ctrl+Y)">↷</button>
+      <button id="saveProject" class="secondary">Salvar versão</button>
       <button id="exportProject" class="secondary">Exportar</button>
       <button id="importProject" class="secondary">Importar</button>
       <input id="importFile" type="file" accept=".json" />
       <div class="room-mini">
         <input id="publishRoom" maxlength="50" placeholder="Código da sala" />
-        <button id="publishScene" class="primary">Publicar cenário</button>
+        <input id="publishPin" maxlength="30" type="password" placeholder="Senha de edição" />
+        <button id="publishScene" class="primary">Publicar</button>
       </div>
     </header>
 
-    <aside id="toolPanel" class="sidebar">
-      <h3>Adicionar</h3>
-      <div class="tool-grid">
-        <button data-tool="select" class="active">Selecionar</button>
-        <button data-tool="wall">Parede</button>
-        <button data-add="door">Porta</button>
-        <button data-add="window">Janela</button>
-        <button data-add="computer">Computador</button>
-        <button data-add="network">Ponto de rede</button>
-        <button data-add="switch">Switch</button>
-        <button data-add="printer">Impressora</button>
-        <button data-add="table">Mesa</button>
-        <button data-add="stairs">Escada</button>
+    <aside id="toolPanel" class="sidebar left-sidebar">
+      <div class="sidebar-heading">
+        <div><span class="eyebrow">FERRAMENTAS</span><h3>Construção</h3></div>
+        <button id="collapseTools" class="small-button">−</button>
       </div>
-      <h3>Editar</h3>
-      <div class="tool-grid">
-        <button data-transform="translate">Mover</button>
-        <button data-transform="rotate">Girar</button>
-        <button data-transform="scale">Escala</button>
-        <button id="duplicateObject">Duplicar</button>
-        <button id="deleteObject" class="delete">Apagar selecionado</button>
+
+      <div class="tool-tabs">
+        <button data-tab="structure" class="active">Estrutura</button>
+        <button data-tab="exterior">Exterior</button>
+        <button data-tab="furniture">Móveis</button>
+        <button data-tab="network">Rede</button>
       </div>
-      <hr />
-      <h3>Planta de referência</h3>
-      <button id="choosePlan" class="secondary wide">Escolher imagem</button>
-      <input id="planFile" type="file" accept="image/*" />
-      <div class="field"><label for="planOpacity">Opacidade</label><input id="planOpacity" type="range" min="0" max="1" step=".05" value=".55" /></div>
-      <p class="note">Parede: clique uma vez no início e outra vez no final. Objetos: escolha o item e clique no piso.</p>
+
+      <div class="tool-section active" data-section="structure">
+        <div class="tool-grid">
+          <button data-tool="select" class="active">Selecionar</button>
+          <button data-tool="wall">Parede</button>
+          <button data-add="door">Porta</button>
+          <button data-add="window">Janela</button>
+          <button data-add="slidingGate">Portão</button>
+          <button data-add="stairs">Escada</button>
+        </div>
+      </div>
+      <div class="tool-section" data-section="exterior">
+        <div class="tool-grid">
+          <button data-tool="road">Rua</button>
+          <button data-tool="sidewalk">Calçada</button>
+          <button data-add="parking">Vaga</button>
+          <button data-add="grass">Área verde</button>
+        </div>
+      </div>
+      <div class="tool-section" data-section="furniture">
+        <div class="tool-grid">
+          <button data-add="table">Mesa</button>
+          <button data-add="chair">Cadeira</button>
+          <button data-add="cabinet">Armário</button>
+          <button data-add="shelf">Estante</button>
+        </div>
+      </div>
+      <div class="tool-section" data-section="network">
+        <div class="tool-grid">
+          <button data-add="computer">Computador</button>
+          <button data-add="laptop">Notebook</button>
+          <button data-add="printer">Impressora</button>
+          <button data-add="network">Ponto de rede</button>
+          <button data-add="switch">Switch</button>
+          <button data-add="router">Roteador</button>
+          <button data-add="rack">Rack</button>
+          <button data-add="server">Servidor</button>
+          <button data-tool="cable">Cabo</button>
+        </div>
+      </div>
+
+      <details open>
+        <summary>Precisão e encaixe</summary>
+        <div class="field"><label for="gridSize">Grade</label><select id="gridSize"><option value="0.1">10 cm</option><option value="0.25" selected>25 cm</option><option value="0.5">50 cm</option><option value="1">1 metro</option></select></div>
+        <label class="check"><input id="smartSnap" type="checkbox" checked /> Encaixe inteligente</label>
+        <label class="check"><input id="showGrid" type="checkbox" checked /> Mostrar grade</label>
+        <div class="field-row">
+          <label>Altura da parede<input id="wallHeightDefault" type="number" value="3" min="1.8" max="8" step="0.05" /></label>
+          <label>Espessura<input id="wallDepthDefault" type="number" value="0.16" min="0.08" max="0.6" step="0.01" /></label>
+        </div>
+        <div class="field"><label for="roadWidthDefault">Largura padrão da rua</label><input id="roadWidthDefault" type="number" value="6" min="2" max="20" step="0.25" /></div>
+      </details>
+
+      <details>
+        <summary>Planta de referência</summary>
+        <button id="choosePlan" class="secondary wide">Escolher imagem</button>
+        <input id="planFile" type="file" accept="image/*" />
+        <div class="field"><label>Opacidade<input id="planOpacity" type="range" min="0" max="1" step=".05" value=".5" /></label></div>
+        <div class="field-row">
+          <label>Escala<input id="planScale" type="number" min="1" max="200" step="1" value="25" /></label>
+          <label>Rotação<input id="planRotation" type="number" min="-180" max="180" step="1" value="0" /></label>
+        </div>
+      </details>
+
+      <details>
+        <summary>Versões salvas</summary>
+        <select id="versionSelect" class="wide"></select>
+        <button id="restoreVersion" class="secondary wide">Restaurar versão</button>
+      </details>
     </aside>
 
-    <aside id="propertiesPanel" class="sidebar">
-      <h3>Objeto selecionado</h3>
-      <div id="noSelection" class="note">Clique em um objeto no cenário.</div>
-      <div id="propertiesForm" class="hidden">
-        <div class="field"><label for="objectName">Nome</label><input id="objectName" /></div>
-        <div class="field"><label for="objectSector">Setor</label><input id="objectSector" /></div>
-        <div class="field"><label for="objectIp">IP</label><input id="objectIp" /></div>
-        <div class="field"><label for="objectSwitch">Switch</label><input id="objectSwitch" /></div>
-        <div class="field"><label for="objectPort">Porta do switch</label><input id="objectPort" /></div>
-        <div class="field"><label for="objectColor">Cor</label><input id="objectColor" type="color" /></div>
-        <button id="applyProperties" class="primary wide">Aplicar informações</button>
+    <aside id="propertiesPanel" class="sidebar right-sidebar">
+      <div class="sidebar-heading">
+        <div><span class="eyebrow">PROPRIEDADES</span><h3 id="selectionTitle">Nenhuma seleção</h3></div>
       </div>
+      <div id="noSelection" class="empty-state">Clique em um objeto. Segure <strong>Shift</strong> para selecionar vários.</div>
+      <div id="propertiesForm" class="hidden">
+        <div class="action-strip">
+          <button data-transform="translate" class="active">Mover</button>
+          <button data-transform="rotate">Girar</button>
+          <button id="duplicateObject">Duplicar</button>
+          <button id="deleteObject" class="delete">Apagar</button>
+        </div>
+
+        <details open>
+          <summary>Posição e dimensões</summary>
+          <div class="field-row thirds">
+            <label>X<input id="propX" type="number" step="0.05" /></label>
+            <label>Y<input id="propY" type="number" step="0.05" /></label>
+            <label>Z<input id="propZ" type="number" step="0.05" /></label>
+          </div>
+          <div class="field-row thirds">
+            <label>Comprimento<input id="propWidth" type="number" min="0.05" step="0.05" /></label>
+            <label>Altura<input id="propHeight" type="number" min="0.02" step="0.05" /></label>
+            <label>Profundidade<input id="propDepth" type="number" min="0.02" step="0.05" /></label>
+          </div>
+          <div class="field-row">
+            <label>Rotação<input id="propRotation" type="number" step="1" /></label>
+            <label>Cor<input id="propColor" type="color" /></label>
+          </div>
+          <label class="check"><input id="propLocked" type="checkbox" /> Bloquear objeto</label>
+        </details>
+
+        <details open>
+          <summary>Identificação</summary>
+          <div class="field"><label>Nome<input id="propName" /></label></div>
+          <div class="field"><label>Setor<input id="propSector" /></label></div>
+          <div class="field"><label>Observações<textarea id="propNotes" rows="2"></textarea></label></div>
+        </details>
+
+        <details id="networkProperties">
+          <summary>Configuração de rede</summary>
+          <div class="field"><label>Endereço IP<input id="propIp" placeholder="192.168.0.10" /></label></div>
+          <div class="field-row">
+            <label>Máscara<input id="propMask" placeholder="255.255.255.0" /></label>
+            <label>Gateway<input id="propGateway" placeholder="192.168.0.1" /></label>
+          </div>
+          <div class="field"><label>MAC<input id="propMac" placeholder="00:11:22:33:44:55" /></label></div>
+          <div class="field-row">
+            <label>Switch<input id="propSwitch" placeholder="SW-01" /></label>
+            <label>Porta<input id="propPort" placeholder="Fa0/01" /></label>
+          </div>
+          <div class="field"><label>Quantidade de portas<input id="propPortCount" type="number" min="1" max="192" step="1" /></label></div>
+          <div id="switchPorts"></div>
+        </details>
+
+        <details id="openingProperties">
+          <summary>Abertura</summary>
+          <div class="field"><label>Altura do peitoril<input id="propSill" type="number" step="0.05" /></label></div>
+          <div class="field"><label>Direção do portão<select id="propSlideDirection"><option value="1">Deslizar para a direita</option><option value="-1">Deslizar para a esquerda</option></select></label></div>
+          <button id="reattachOpening" class="secondary wide">Reencaixar na parede mais próxima</button>
+        </details>
+
+        <button id="applyProperties" class="primary wide">Aplicar alterações</button>
+      </div>
+
+      <details open class="validation-box">
+        <summary>Diagnóstico da rede</summary>
+        <div id="validationResults" class="validation-results">Nenhum problema encontrado.</div>
+      </details>
     </aside>
+
+    <div id="measurementBadge" class="hidden"></div>
     <div id="builderStatus">Modo selecionar.</div>
   </section>
 
   <section id="gameUi" class="hidden">
-    <div id="gameControls" class="game-panel"><strong>Controles</strong><br>W, A, S, D: andar<br>Mouse: olhar<br>Clique: interagir</div>
+    <div id="gameControls" class="game-panel"><strong>Controles</strong><br>W, A, S, D: andar<br>Shift: correr<br>E ou clique: interagir<br>1: acenar · 2: apontar</div>
     <div id="playersPanel" class="game-panel"><strong>Participantes</strong><ol id="playersList"></ol></div>
     <button id="exitGame" class="danger">Sair</button>
     <div id="crosshair"></div>
+    <div id="interactionHint"></div>
     <div id="toast"></div>
   </section>
 
   <section id="equipmentModal">
     <div class="modal-card">
       <h2 id="modalName">Equipamento</h2>
-      <p><strong>Setor:</strong> <span id="modalSector">-</span></p>
-      <p><strong>IP:</strong> <span id="modalIp">-</span></p>
-      <p><strong>Switch:</strong> <span id="modalSwitch">-</span></p>
-      <p><strong>Porta:</strong> <span id="modalPort">-</span></p>
+      <div class="equipment-grid">
+        <p><strong>Setor</strong><span id="modalSector">-</span></p>
+        <p><strong>IP</strong><span id="modalIp">-</span></p>
+        <p><strong>Máscara</strong><span id="modalMask">-</span></p>
+        <p><strong>Gateway</strong><span id="modalGateway">-</span></p>
+        <p><strong>Switch</strong><span id="modalSwitch">-</span></p>
+        <p><strong>Porta</strong><span id="modalPort">-</span></p>
+      </div>
+      <p id="modalNotes"></p>
       <button id="closeModal" class="secondary wide">Fechar</button>
     </div>
   </section>
 `;
 
 const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
 const homeOverlay = $('#homeOverlay');
 const builderUi = $('#builderUi');
 const gameUi = $('#gameUi');
 const builderStatus = $('#builderStatus');
-const joinName = $('#joinName');
-const joinRoom = $('#joinRoom');
-const publishRoom = $('#publishRoom');
+const measurementBadge = $('#measurementBadge');
 const playersList = $('#playersList');
 const toast = $('#toast');
+const interactionHint = $('#interactionHint');
 const joinButton = $('#joinRoomButton');
 const publishButton = $('#publishScene');
 
-joinName.value = localStorage.getItem('empresa3d-name') || '';
-joinRoom.value = localStorage.getItem('empresa3d-room') || 'turma-0123';
-publishRoom.value = localStorage.getItem('empresa3d-room') || 'turma-0123';
+const avatarInputs = {
+  skin: $('#avatarSkin'),
+  hairStyle: $('#avatarHairStyle'),
+  hair: $('#avatarHair'),
+  shirt: $('#avatarShirt'),
+  pants: $('#avatarPants'),
+  shoes: $('#avatarShoes'),
+};
+
+let avatarConfig = sanitizeAvatar(JSON.parse(localStorage.getItem('empresa3d-avatar') || '{}'));
+for (const [key, input] of Object.entries(avatarInputs)) input.value = avatarConfig[key] || DEFAULT_AVATAR[key];
+
+$('#joinName').value = localStorage.getItem('empresa3d-name') || '';
+$('#joinRoom').value = localStorage.getItem('empresa3d-room') || 'turma-0123';
+$('#publishRoom').value = localStorage.getItem('empresa3d-room') || 'turma-0123';
+
 if (!supabase) {
-  $('#onlineWarning').textContent = supabaseInitError
-    ? `Configuração do Supabase com erro: ${supabaseInitError}`
-    : 'O construtor funciona normalmente. Para usar salas online, configure VITE_SUPABASE_URL e VITE_SUPABASE_PUBLISHABLE_KEY na Vercel.';
+  $('#onlineWarning').textContent = supabaseInitError || 'Configure VITE_SUPABASE_URL e VITE_SUPABASE_PUBLISHABLE_KEY na Vercel.';
   joinButton.disabled = true;
   publishButton.disabled = true;
 }
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xaeb5b2);
-scene.fog = new THREE.Fog(0xaeb5b2, 45, 120);
+scene.background = new THREE.Color(0xbcc7c4);
+scene.fog = new THREE.Fog(0xbcc7c4, 65, 180);
 
-const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, .1, 220);
-camera.position.set(15, 15, 18);
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.domElement.className = 'webgl';
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 app.prepend(renderer.domElement);
 
-const orbit = new OrbitControls(camera, renderer.domElement);
-orbit.target.set(0, 0, 0);
-orbit.enableDamping = true;
-orbit.enabled = false;
+const gameCamera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.08, 260);
+gameCamera.position.set(16, 14, 19);
+const topFrustum = 38;
+const topCamera = new THREE.OrthographicCamera(-topFrustum, topFrustum, topFrustum, -topFrustum, 0.1, 300);
+topCamera.position.set(0, 70, 0.01);
+topCamera.up.set(0, 0, -1);
+topCamera.lookAt(0, 0, 0);
 
-const pointerControls = new PointerLockControls(camera, renderer.domElement);
-const transform = new TransformControls(camera, renderer.domElement);
-transform.setTranslationSnap(.25);
-transform.setRotationSnap(THREE.MathUtils.degToRad(15));
-transform.setScaleSnap(.1);
+const perspectiveControls = new OrbitControls(gameCamera, renderer.domElement);
+perspectiveControls.target.set(0, 0, 0);
+perspectiveControls.enableDamping = true;
+perspectiveControls.maxPolarAngle = Math.PI / 2 - 0.03;
+perspectiveControls.minDistance = 2;
+perspectiveControls.maxDistance = 120;
+perspectiveControls.enabled = false;
+perspectiveControls.mouseButtons.LEFT = -1;
+perspectiveControls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
+perspectiveControls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
+
+const mapControls = new MapControls(topCamera, renderer.domElement);
+mapControls.enableDamping = true;
+mapControls.enableRotate = false;
+mapControls.screenSpacePanning = true;
+mapControls.minZoom = 0.35;
+mapControls.maxZoom = 8;
+mapControls.enabled = false;
+mapControls.mouseButtons.LEFT = -1;
+mapControls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+mapControls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
+
+const pointerControls = new PointerLockControls(gameCamera, renderer.domElement);
+let activeBuilderCamera = topCamera;
+
+const transform = new TransformControls(activeBuilderCamera, renderer.domElement);
+transform.setTranslationSnap(0.25);
+transform.setRotationSnap(THREE.MathUtils.degToRad(5));
 scene.add(transform.getHelper());
-transform.addEventListener('dragging-changed', (event) => { orbit.enabled = !event.value && appMode === 'builder'; });
-transform.addEventListener('objectChange', () => {
-  if (selected?.userData.kind === 'door' && appMode === 'builder') {
-    selected.userData.closedRotation = selected.rotation.y;
-    selected.userData.open = false;
-  }
-  syncPropertiesForm();
-});
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x5a605c, 2.4));
-const sun = new THREE.DirectionalLight(0xfff2c9, 3.1);
-sun.position.set(-12, 18, 10);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x59635e, 2.25));
+const sun = new THREE.DirectionalLight(0xfff3d4, 3.2);
+sun.position.set(-25, 36, 18);
 sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -70;
+sun.shadow.camera.right = 70;
+sun.shadow.camera.top = 70;
+sun.shadow.camera.bottom = -70;
 scene.add(sun);
 
 const floor = new THREE.Mesh(
-  new THREE.PlaneGeometry(80, 80),
-  new THREE.MeshStandardMaterial({ color: 0xaaa48a, roughness: 1 }),
+  new THREE.PlaneGeometry(160, 160),
+  new THREE.MeshStandardMaterial({ color: 0xc8c2aa, roughness: 1 }),
 );
 floor.rotation.x = -Math.PI / 2;
 floor.receiveShadow = true;
 floor.userData.isFloor = true;
 scene.add(floor);
-const grid = new THREE.GridHelper(80, 80, 0x373b38, 0x7b817b);
+
+const grid = new THREE.GridHelper(160, 160, 0x343c38, 0x8b938d);
+grid.position.y = 0.01;
 scene.add(grid);
 
 const world = new THREE.Group();
+world.name = 'world';
 scene.add(world);
 const referenceLayer = new THREE.Group();
 scene.add(referenceLayer);
 const avatarLayer = new THREE.Group();
 scene.add(avatarLayer);
+const helperLayer = new THREE.Group();
+scene.add(helperLayer);
+const previewLayer = new THREE.Group();
+scene.add(previewLayer);
 
 let appMode = 'home';
+let builderView = 'top';
 let currentTool = 'select';
-let selected = null;
-let wallStart = null;
+let segmentStart = null;
+let cableStart = null;
+let previewObject = null;
 let referencePlane = null;
+let selected = null;
+const selectedRoots = new Set();
+const selectionHelpers = new Map();
+let transformStartState = null;
 let realtimeChannel = null;
 let currentRoom = '';
 let localPlayer = null;
 let lastMoveSent = 0;
 let lastPresenceSent = 0;
 let toastTimer = null;
+let interactionRoot = null;
 const remotePlayers = new Map();
 const keys = new Set();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const centerPointer = new THREE.Vector2(0, 0);
+const clock = new THREE.Clock();
+let elapsed = 0;
 
-function makeMaterial(color) {
-  return new THREE.MeshStandardMaterial({ color, roughness: .76 });
+const settings = {
+  grid: Number($('#gridSize').value),
+  smartSnap: $('#smartSnap').checked,
+  wallHeight: Number($('#wallHeightDefault').value),
+  wallDepth: Number($('#wallDepthDefault').value),
+  roadWidth: Number($('#roadWidthDefault').value),
+};
+
+const history = [];
+let historyIndex = -1;
+let restoringHistory = false;
+
+function setBuilderStatus(message) {
+  builderStatus.textContent = message;
 }
 
-function markRoot(root) {
-  root.traverse((child) => {
-    child.castShadow = true;
-    child.receiveShadow = true;
-    child.userData.root = root;
-  });
+function showToast(message) {
+  toast.textContent = message;
+  toast.classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('visible'), 2400);
 }
 
-function defaultName(kind) {
-  return ({
-    wall: 'Parede', door: 'Porta', window: 'Janela', computer: 'PC-01', network: 'PTR-01',
-    switch: 'SW-01', printer: 'IMP-01', table: 'Mesa', stairs: 'Escada',
-  })[kind] || 'Objeto';
+function normalizeRoom(value) {
+  return String(value || '').trim().replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 50);
 }
 
-function registerObject(root, kind, meta = {}) {
-  root.userData.objectId = root.userData.objectId || crypto.randomUUID();
-  root.userData.kind = kind;
-  root.userData.meta = {
-    name: meta.name || defaultName(kind),
-    sector: meta.sector || '',
-    ip: meta.ip || '',
-    switchName: meta.switchName || '',
-    port: meta.port || '',
-  };
-  markRoot(root);
-  world.add(root);
-  selectObject(root);
-  return root;
-}
-
-function createWall(a, b, id = null) {
-  const dx = b.x - a.x;
-  const dz = b.z - a.z;
-  const length = Math.max(.25, Math.hypot(dx, dz));
-  const root = new THREE.Mesh(new THREE.BoxGeometry(length, 3, .2), makeMaterial(0xc6bd8c));
-  root.position.set((a.x + b.x) / 2, 1.5, (a.z + b.z) / 2);
-  root.rotation.y = -Math.atan2(dz, dx);
-  if (id) root.userData.objectId = id;
-  root.userData.baseSize = [length, 3, .2];
-  return registerObject(root, 'wall');
-}
-
-function createDoor(position, id = null) {
-  const root = new THREE.Group();
-  const panel = new THREE.Mesh(new THREE.BoxGeometry(.92, 2.2, .1), makeMaterial(0x785438));
-  panel.position.set(.46, 1.1, 0);
-  root.add(panel);
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(.045, 12, 10), makeMaterial(0xd0b56a));
-  knob.position.set(.78, 1.08, .08);
-  root.add(knob);
-  root.position.copy(position);
-  if (id) root.userData.objectId = id;
-  root.userData.open = false;
-  root.userData.closedRotation = root.rotation.y;
-  return registerObject(root, 'door');
-}
-
-function createWindow(position, id = null) {
-  const root = new THREE.Group();
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.1, .12), makeMaterial(0x5b5547));
-  frame.position.y = 1.55;
-  root.add(frame);
-  const glass = new THREE.Mesh(
-    new THREE.BoxGeometry(1.28, .88, .14),
-    new THREE.MeshStandardMaterial({ color: 0x8fc5dc, transparent: true, opacity: .42, roughness: .1 }),
-  );
-  glass.position.y = 1.55;
-  root.add(glass);
-  root.position.copy(position);
-  if (id) root.userData.objectId = id;
-  return registerObject(root, 'window');
-}
-
-function createComputer(position, id = null) {
-  const root = new THREE.Group();
-  const desk = new THREE.Mesh(new THREE.BoxGeometry(1.3, .1, .7), makeMaterial(0x765f45));
-  desk.position.y = .72;
-  root.add(desk);
-  const monitor = new THREE.Mesh(new THREE.BoxGeometry(.62, .46, .09), makeMaterial(0x263036));
-  monitor.position.set(0, 1.16, -.1);
-  root.add(monitor);
-  const stand = new THREE.Mesh(new THREE.BoxGeometry(.08, .28, .08), makeMaterial(0x444b4e));
-  stand.position.set(0, .92, -.1);
-  root.add(stand);
-  root.position.copy(position);
-  if (id) root.userData.objectId = id;
-  return registerObject(root, 'computer');
-}
-
-function createNetwork(position, id = null) {
-  const root = new THREE.Mesh(new THREE.BoxGeometry(.24, .24, .08), makeMaterial(0x2e78cc));
-  root.position.copy(position);
-  root.position.y = .55;
-  if (id) root.userData.objectId = id;
-  root.userData.baseSize = [.24, .24, .08];
-  return registerObject(root, 'network');
-}
-
-function createSwitch(position, id = null) {
-  const root = new THREE.Group();
-  const rack = new THREE.Mesh(new THREE.BoxGeometry(.9, 1.9, .72), makeMaterial(0x444a4c));
-  rack.position.y = .95;
-  root.add(rack);
-  const switchMesh = new THREE.Mesh(new THREE.BoxGeometry(.72, .2, .13), makeMaterial(0x20343b));
-  switchMesh.position.set(0, 1.25, .41);
-  root.add(switchMesh);
-  root.position.copy(position);
-  if (id) root.userData.objectId = id;
-  return registerObject(root, 'switch');
-}
-
-function createPrinter(position, id = null) {
-  const root = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(.72, .56, .66), makeMaterial(0xd7d7d0));
-  body.position.y = .34;
-  root.add(body);
-  const top = new THREE.Mesh(new THREE.BoxGeometry(.6, .16, .5), makeMaterial(0x4c5456));
-  top.position.y = .7;
-  root.add(top);
-  root.position.copy(position);
-  if (id) root.userData.objectId = id;
-  return registerObject(root, 'printer');
-}
-
-function createTable(position, id = null) {
-  const root = new THREE.Group();
-  const top = new THREE.Mesh(new THREE.BoxGeometry(1.8, .12, .9), makeMaterial(0x7b6548));
-  top.position.y = .78;
-  root.add(top);
-  for (const x of [-.75, .75]) for (const z of [-.32, .32]) {
-    const leg = new THREE.Mesh(new THREE.BoxGeometry(.1, .75, .1), makeMaterial(0x55483a));
-    leg.position.set(x, .38, z);
-    root.add(leg);
-  }
-  root.position.copy(position);
-  if (id) root.userData.objectId = id;
-  return registerObject(root, 'table');
-}
-
-function createStairs(position, id = null) {
-  const root = new THREE.Group();
-  for (let index = 0; index < 9; index += 1) {
-    const step = new THREE.Mesh(
-      new THREE.BoxGeometry(1.55, (index + 1) * .18, .38),
-      makeMaterial(index % 2 ? 0x8d8d85 : 0x999990),
-    );
-    step.position.set(0, (index + 1) * .09, -index * .38);
-    root.add(step);
-  }
-  root.position.copy(position);
-  if (id) root.userData.objectId = id;
-  return registerObject(root, 'stairs');
-}
-
-function createByKind(kind, position, id = null) {
-  if (kind === 'door') return createDoor(position, id);
-  if (kind === 'window') return createWindow(position, id);
-  if (kind === 'computer') return createComputer(position, id);
-  if (kind === 'network') return createNetwork(position, id);
-  if (kind === 'switch') return createSwitch(position, id);
-  if (kind === 'printer') return createPrinter(position, id);
-  if (kind === 'table') return createTable(position, id);
-  if (kind === 'stairs') return createStairs(position, id);
-  return null;
-}
-
-function firstColor(root) {
-  let result = '#888888';
-  root.traverse((child) => {
-    if (result === '#888888' && child.material?.color) result = `#${child.material.color.getHexString()}`;
-  });
-  return result;
-}
-
-function applyColor(root, color) {
-  const parsed = new THREE.Color(color);
-  root.traverse((child) => {
-    if (child.material?.color) child.material.color.copy(parsed);
-  });
-}
-
-function selectObject(root) {
-  selected = root;
-  transform.detach();
-  if (root && appMode === 'builder') transform.attach(root);
-  $('#noSelection').classList.toggle('hidden', Boolean(root));
-  $('#propertiesForm').classList.toggle('hidden', !root);
-  syncPropertiesForm();
-}
-
-function syncPropertiesForm() {
-  if (!selected) return;
-  const meta = selected.userData.meta || {};
-  $('#objectName').value = meta.name || '';
-  $('#objectSector').value = meta.sector || '';
-  $('#objectIp').value = meta.ip || '';
-  $('#objectSwitch').value = meta.switchName || '';
-  $('#objectPort').value = meta.port || '';
-  $('#objectColor').value = firstColor(selected);
+function round(value, decimals = 2) {
+  const factor = 10 ** decimals;
+  return Math.round((Number(value) || 0) * factor) / factor;
 }
 
 function serializeWorld() {
-  return world.children.map((root) => ({
-    id: root.userData.objectId,
-    kind: root.userData.kind,
-    meta: root.userData.meta,
-    position: root.position.toArray(),
-    rotation: [root.rotation.x, root.rotation.y, root.rotation.z],
-    scale: root.scale.toArray(),
-    color: firstColor(root),
-    baseSize: root.userData.baseSize || null,
-    open: Boolean(root.userData.open),
-  }));
+  return world.children.map(serializeObject);
 }
 
 function clearWorld() {
-  transform.detach();
-  selected = null;
-  while (world.children.length) {
-    const root = world.children[0];
-    root.traverse((child) => {
-      child.geometry?.dispose?.();
-      child.material?.dispose?.();
-    });
+  clearSelection();
+  for (const root of [...world.children]) {
     world.remove(root);
+    disposeRoot(root);
   }
-  selectObject(null);
-}
-
-function createFromData(data) {
-  const position = new THREE.Vector3().fromArray(data.position || [0, 0, 0]);
-  let root;
-  if (data.kind === 'wall') {
-    const length = data.baseSize?.[0] || 2;
-    root = createWall(
-      new THREE.Vector3(position.x - length / 2, 0, position.z),
-      new THREE.Vector3(position.x + length / 2, 0, position.z),
-      data.id,
-    );
-  } else {
-    root = createByKind(data.kind, position, data.id);
-  }
-  if (!root) return null;
-  root.position.fromArray(data.position || [0, 0, 0]);
-  root.rotation.set(...(data.rotation || [0, 0, 0]));
-  root.scale.fromArray(data.scale || [1, 1, 1]);
-  root.userData.meta = { ...(root.userData.meta || {}), ...(data.meta || {}) };
-  if (data.color) applyColor(root, data.color);
-  if (data.kind === 'door') {
-    root.userData.closedRotation = root.rotation.y;
-    root.userData.open = Boolean(data.open);
-    if (root.userData.open) root.rotation.y = root.userData.closedRotation - Math.PI / 2;
-  }
-  return root;
 }
 
 function loadWorld(data) {
   clearWorld();
-  for (const item of Array.isArray(data) ? data : []) createFromData(item);
-  selectObject(null);
+  const objects = Array.isArray(data) ? data : Array.isArray(data?.objects) ? data.objects : [];
+  for (const item of objects) {
+    const root = createObjectFromData(item, world);
+    if (root) world.add(root);
+  }
+  finalizeLoadedWorld(world);
+  refreshValidation();
 }
 
-function saveLocal() {
-  localStorage.setItem('empresa3d-project', JSON.stringify(serializeWorld()));
-  setBuilderStatus('Projeto salvo neste navegador.');
+function sceneString() {
+  return JSON.stringify(serializeWorld());
+}
+
+function commitHistory(label = 'Alteração') {
+  if (restoringHistory) return;
+  const state = sceneString();
+  if (history[historyIndex]?.state === state) return;
+  history.splice(historyIndex + 1);
+  history.push({ label, state, at: Date.now() });
+  if (history.length > 70) history.shift();
+  historyIndex = history.length - 1;
+  updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+  $('#undoAction').disabled = historyIndex <= 0;
+  $('#redoAction').disabled = historyIndex >= history.length - 1;
+}
+
+function restoreHistory(index) {
+  if (index < 0 || index >= history.length) return;
+  restoringHistory = true;
+  loadWorld(JSON.parse(history[index].state));
+  restoringHistory = false;
+  historyIndex = index;
+  updateHistoryButtons();
+  setBuilderStatus(`${history[index].label} restaurada.`);
+}
+
+function undo() { restoreHistory(historyIndex - 1); }
+function redo() { restoreHistory(historyIndex + 1); }
+
+function saveLocalVersion() {
+  const objects = serializeWorld();
+  localStorage.setItem('empresa3d-project-v2', JSON.stringify(objects));
+  const versions = JSON.parse(localStorage.getItem('empresa3d-versions-v2') || '[]');
+  versions.unshift({ id: crypto.randomUUID(), at: Date.now(), objects });
+  localStorage.setItem('empresa3d-versions-v2', JSON.stringify(versions.slice(0, 12)));
+  updateVersionList();
+  setBuilderStatus('Versão salva neste navegador.');
 }
 
 function restoreLocal() {
-  const saved = localStorage.getItem('empresa3d-project');
-  if (!saved) return;
-  try { loadWorld(JSON.parse(saved)); } catch { localStorage.removeItem('empresa3d-project'); }
+  const saved = localStorage.getItem('empresa3d-project-v2') || localStorage.getItem('empresa3d-project');
+  if (!saved) return false;
+  try {
+    loadWorld(JSON.parse(saved));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-function setBuilderStatus(message) { builderStatus.textContent = message; }
-function setTool(tool) {
-  currentTool = tool;
-  wallStart = null;
-  document.querySelectorAll('[data-tool]').forEach((button) => button.classList.toggle('active', button.dataset.tool === tool));
+function updateVersionList() {
+  const versions = JSON.parse(localStorage.getItem('empresa3d-versions-v2') || '[]');
+  $('#versionSelect').innerHTML = versions.length
+    ? versions.map((version) => `<option value="${version.id}">${new Date(version.at).toLocaleString('pt-BR')}</option>`).join('')
+    : '<option value="">Nenhuma versão salva</option>';
 }
 
-function groundPoint(event) {
+function addRoot(root, label = 'Objeto adicionado') {
+  world.add(root);
+  if (root.userData.kind === 'wall') rebuildWall(root, world);
+  if (root.userData.kind === 'cable') updateAllCables(world);
+  selectOnly(root);
+  commitHistory(label);
+  refreshValidation();
+  return root;
+}
+
+function removeRoots(roots) {
+  const affectedWalls = new Set();
+  for (const root of roots) {
+    if (OPENING_KINDS.has(root.userData.kind) && root.userData.hostWallId) affectedWalls.add(root.userData.hostWallId);
+    if (root.userData.kind === 'wall') {
+      for (const opening of world.children.filter((item) => item.userData.hostWallId === root.userData.objectId)) {
+        opening.userData.hostWallId = '';
+        opening.userData.hostOffset = 0;
+      }
+    }
+    for (const cable of [...world.children].filter((item) => item.userData.kind === 'cable' && (item.userData.fromId === root.userData.objectId || item.userData.toId === root.userData.objectId))) {
+      world.remove(cable);
+      disposeRoot(cable);
+    }
+    world.remove(root);
+    disposeRoot(root);
+  }
+  for (const id of affectedWalls) {
+    const wall = world.children.find((item) => item.userData.objectId === id);
+    if (wall) rebuildWall(wall, world);
+  }
+  clearSelection();
+  updateAllCables(world);
+  commitHistory('Objetos apagados');
+  refreshValidation();
+}
+
+function clearSelectionHelpers() {
+  for (const helper of selectionHelpers.values()) helperLayer.remove(helper);
+  selectionHelpers.clear();
+}
+
+function refreshSelectionHelpers() {
+  clearSelectionHelpers();
+  for (const root of selectedRoots) {
+    const helper = new THREE.BoxHelper(root, root === selected ? 0xffd75e : 0x74c7ff);
+    helper.material.depthTest = false;
+    helper.renderOrder = 30;
+    helperLayer.add(helper);
+    selectionHelpers.set(root.userData.objectId, helper);
+  }
+}
+
+function clearSelection() {
+  selectedRoots.clear();
+  selected = null;
+  transform.detach();
+  refreshSelectionHelpers();
+  syncPropertiesForm();
+}
+
+function attachTransform() {
+  transform.detach();
+  if (selected && selectedRoots.size === 1 && !selected.userData.locked && selected.userData.kind !== 'cable') {
+    transform.camera = activeBuilderCamera;
+    transform.attach(selected);
+  }
+}
+
+function selectObject(root, additive = false) {
+  if (!additive) selectedRoots.clear();
+  if (root) {
+    if (additive && selectedRoots.has(root)) selectedRoots.delete(root);
+    else selectedRoots.add(root);
+  }
+  selected = root && selectedRoots.has(root) ? root : [...selectedRoots].at(-1) || null;
+  attachTransform();
+  refreshSelectionHelpers();
+  syncPropertiesForm();
+}
+
+function selectOnly(root) { selectObject(root, false); }
+
+function refreshValidation() {
+  const issues = networkValidation(world);
+  const target = $('#validationResults');
+  target.classList.toggle('has-issues', issues.length > 0);
+  target.innerHTML = issues.length
+    ? `<ul>${issues.slice(0, 12).map((issue) => `<li>${escapeHtml(issue)}</li>`).join('')}</ul>`
+    : '<span class="ok">✓ Nenhum problema encontrado.</span>';
+  if (selected?.userData.kind === 'switch') updateSwitchPorts(selected);
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+}
+
+function getObjectDimensions(root) {
+  if (root?.userData?.dimensions) return root.userData.dimensions;
+  const box = new THREE.Box3().setFromObject(root);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  return { width: size.x, height: size.y, depth: size.z };
+}
+
+function syncPropertiesForm() {
+  const count = selectedRoots.size;
+  $('#noSelection').classList.toggle('hidden', count > 0);
+  $('#propertiesForm').classList.toggle('hidden', count === 0);
+  $('#selectionTitle').textContent = count === 0 ? 'Nenhuma seleção' : count > 1 ? `${count} objetos selecionados` : objectLabel(selected.userData.kind);
+  if (!selected) return;
+
+  const meta = selected.userData.meta || {};
+  const dimensions = getObjectDimensions(selected);
+  $('#propX').value = round(selected.position.x);
+  $('#propY').value = round(selected.position.y);
+  $('#propZ').value = round(selected.position.z);
+  $('#propRotation').value = round(THREE.MathUtils.radToDeg(selected.rotation.y), 1);
+  $('#propWidth').value = round(dimensions.width);
+  $('#propHeight').value = round(dimensions.height);
+  $('#propDepth').value = round(dimensions.depth);
+  $('#propColor').value = getFirstColor(selected);
+  $('#propLocked').checked = Boolean(selected.userData.locked);
+  $('#propName').value = meta.name || '';
+  $('#propSector').value = meta.sector || '';
+  $('#propNotes').value = meta.notes || '';
+  $('#propIp').value = meta.ip || '';
+  $('#propMask').value = meta.mask || '';
+  $('#propGateway').value = meta.gateway || '';
+  $('#propMac').value = meta.mac || '';
+  $('#propSwitch').value = meta.switchName || '';
+  $('#propPort').value = meta.port || '';
+  $('#propPortCount').value = meta.portCount || '';
+  $('#propSill').value = selected.userData.sillHeight ?? 1.05;
+  $('#propSlideDirection').value = String(selected.userData.slideDirection || 1);
+
+  $('#networkProperties').classList.toggle('hidden', !NETWORK_KINDS.has(selected.userData.kind));
+  $('#openingProperties').classList.toggle('hidden', !OPENING_KINDS.has(selected.userData.kind));
+  $('#propSill').closest('.field').classList.toggle('hidden', selected.userData.kind !== 'window');
+  $('#propSlideDirection').closest('.field').classList.toggle('hidden', selected.userData.kind !== 'slidingGate');
+  updateSwitchPorts(selected);
+}
+
+function updateSwitchPorts(root) {
+  const panel = $('#switchPorts');
+  if (!root || root.userData.kind !== 'switch') {
+    panel.innerHTML = '';
+    return;
+  }
+  const switchName = String(root.userData.meta?.name || '').trim();
+  const count = Math.max(1, Math.min(192, Number(root.userData.meta?.portCount) || 24));
+  const connected = new Map();
+  for (const item of world.children.filter((candidate) => NETWORK_KINDS.has(candidate.userData.kind))) {
+    const meta = item.userData.meta || {};
+    if (String(meta.switchName || '').trim().toLowerCase() !== switchName.toLowerCase()) continue;
+    const match = String(meta.port || '').match(/(\d+)$/);
+    if (match) connected.set(Number(match[1]), meta.name || objectLabel(item.userData.kind));
+  }
+  panel.innerHTML = `<div class="port-table"><strong>Mapa de portas</strong>${Array.from({ length: Math.min(count, 48) }, (_, index) => {
+    const number = index + 1;
+    return `<div class="port-row ${connected.has(number) ? 'used' : ''}"><span>${String(number).padStart(2, '0')}</span><span>${escapeHtml(connected.get(number) || 'Livre')}</span></div>`;
+  }).join('')}</div>`;
+}
+
+function applyProperties() {
+  if (!selected) return;
+  const root = selected;
+  const kind = root.userData.kind;
+  const desiredPosition = new THREE.Vector3(Number($('#propX').value), Number($('#propY').value), Number($('#propZ').value));
+  const desiredRotation = THREE.MathUtils.degToRad(Number($('#propRotation').value) || 0);
+  const dimensions = {
+    width: Number($('#propWidth').value),
+    height: Number($('#propHeight').value),
+    depth: Number($('#propDepth').value),
+  };
+
+  root.userData.meta = {
+    ...(root.userData.meta || {}),
+    name: $('#propName').value.trim(),
+    sector: $('#propSector').value.trim(),
+    notes: $('#propNotes').value.trim(),
+    ip: $('#propIp').value.trim(),
+    mask: $('#propMask').value.trim(),
+    gateway: $('#propGateway').value.trim(),
+    mac: $('#propMac').value.trim(),
+    switchName: $('#propSwitch').value.trim(),
+    port: $('#propPort').value.trim(),
+    portCount: $('#propPortCount').value ? Number($('#propPortCount').value) : '',
+  };
+  root.userData.locked = $('#propLocked').checked;
+  applyObjectColor(root, $('#propColor').value);
+
+  if (SEGMENT_KINDS.has(kind)) {
+    const info = getSegmentInfo(root);
+    const delta = new THREE.Vector2(desiredPosition.x - info.center.x, desiredPosition.z - info.center.y);
+    const center = new THREE.Vector2(desiredPosition.x, desiredPosition.z);
+    const length = Math.max(0.1, dimensions.width || info.length);
+    const tangent = new THREE.Vector2(Math.cos(-desiredRotation), Math.sin(-desiredRotation));
+    const half = tangent.clone().multiplyScalar(length / 2);
+    root.userData.segment.start = [center.x - half.x, center.y - half.y];
+    root.userData.segment.end = [center.x + half.x, center.y + half.y];
+    if (kind === 'wall') {
+      root.userData.segment.height = Math.max(0.2, dimensions.height);
+      root.userData.segment.thickness = Math.max(0.05, dimensions.depth);
+      rebuildWall(root, world);
+    } else {
+      root.userData.segment.width = Math.max(0.2, dimensions.depth);
+      rebuildSegment(root);
+    }
+    void delta;
+  } else {
+    root.position.copy(desiredPosition);
+    root.rotation.y = desiredRotation;
+    if (kind === 'window') root.userData.sillHeight = Math.max(0, Number($('#propSill').value) || 0);
+    if (kind === 'slidingGate') root.userData.slideDirection = Number($('#propSlideDirection').value) === -1 ? -1 : 1;
+    resizeObject(root, dimensions, world);
+    if (OPENING_KINDS.has(kind)) {
+      const result = snapOpeningToWall(root, world, root.position, { maxDistance: 3, grid: settings.grid });
+      if (!result.ok) setBuilderStatus(result.reason);
+    }
+  }
+
+  updateAllCables(world);
+  attachTransform();
+  refreshSelectionHelpers();
+  syncPropertiesForm();
+  refreshValidation();
+  commitHistory('Propriedades alteradas');
+  setBuilderStatus('Alterações aplicadas.');
+}
+
+function duplicateSelection() {
+  if (!selectedRoots.size) return;
+  const originals = [...selectedRoots];
+  clearSelection();
+  for (const original of originals) {
+    if (original.userData.kind === 'cable') continue;
+    const data = serializeObject(original);
+    data.id = crypto.randomUUID();
+    if (data.segment) {
+      data.segment.start[0] += settings.grid * 2;
+      data.segment.end[0] += settings.grid * 2;
+    } else {
+      data.position[0] += settings.grid * 2;
+      data.position[2] += settings.grid * 2;
+      if (OPENING_KINDS.has(data.kind)) data.hostWallId = '';
+    }
+    const copy = createObjectFromData(data, world);
+    if (copy) {
+      world.add(copy);
+      selectedRoots.add(copy);
+      selected = copy;
+    }
+  }
+  finalizeLoadedWorld(world);
+  attachTransform();
+  refreshSelectionHelpers();
+  syncPropertiesForm();
+  commitHistory('Objetos duplicados');
+}
+
+function moveSelectedBy(dx, dz) {
+  if (!selectedRoots.size) return;
+  for (const root of selectedRoots) {
+    if (root.userData.locked) continue;
+    if (SEGMENT_KINDS.has(root.userData.kind)) {
+      root.userData.segment.start[0] += dx;
+      root.userData.segment.start[1] += dz;
+      root.userData.segment.end[0] += dx;
+      root.userData.segment.end[1] += dz;
+      if (root.userData.kind === 'wall') rebuildWall(root, world);
+      else rebuildSegment(root);
+    } else {
+      root.position.x += dx;
+      root.position.z += dz;
+      if (OPENING_KINDS.has(root.userData.kind)) snapOpeningToWall(root, world, root.position, { maxDistance: 2.5, grid: settings.grid });
+    }
+  }
+  updateAllCables(world);
+  refreshSelectionHelpers();
+  syncPropertiesForm();
+  commitHistory('Objetos movidos');
+}
+
+function currentBuilderCamera() { return activeBuilderCamera; }
+
+function pointerCoordinates(event) {
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
+}
+
+function groundPoint(event) {
+  pointerCoordinates(event);
+  raycaster.setFromCamera(pointer, currentBuilderCamera());
   return raycaster.intersectObject(floor, false)[0]?.point?.clone() || null;
 }
 
 function pickedRoot(event) {
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointer, camera);
-  const hit = raycaster.intersectObjects(world.children, true)[0];
-  return hit?.object?.userData?.root || null;
+  pointerCoordinates(event);
+  raycaster.setFromCamera(pointer, currentBuilderCamera());
+  const hits = raycaster.intersectObjects(world.children, true);
+  return hits.find((hit) => hit.object.userData.root?.visible)?.object?.userData?.root || null;
 }
 
-renderer.domElement.addEventListener('pointerdown', (event) => {
-  if (appMode !== 'builder' || transform.dragging || event.button !== 0) return;
-  if (currentTool === 'wall') {
-    const point = groundPoint(event);
-    if (!point) return;
-    point.set(Math.round(point.x * 4) / 4, 0, Math.round(point.z * 4) / 4);
-    if (!wallStart) {
-      wallStart = point;
-      setBuilderStatus('Agora clique no ponto final da parede.');
+function snapGrid(value) {
+  return Math.round(value / settings.grid) * settings.grid;
+}
+
+function endpointCandidates(kind) {
+  const allowed = kind === 'road' ? new Set(['road', 'sidewalk']) : kind === 'sidewalk' ? new Set(['sidewalk', 'road']) : new Set(['wall']);
+  const result = [];
+  for (const root of world.children.filter((item) => allowed.has(item.userData.kind) && item.userData.segment)) {
+    result.push(new THREE.Vector3(root.userData.segment.start[0], 0, root.userData.segment.start[1]));
+    result.push(new THREE.Vector3(root.userData.segment.end[0], 0, root.userData.segment.end[1]));
+  }
+  return result;
+}
+
+function smartSnapPoint(raw, start = null, kind = 'wall') {
+  const point = raw.clone();
+  point.y = 0;
+  let reason = '';
+  point.x = snapGrid(point.x);
+  point.z = snapGrid(point.z);
+  if (!settings.smartSnap) return { point, reason: 'grade' };
+
+  const threshold = Math.max(0.34, settings.grid * 1.55);
+  let nearestEndpoint = null;
+  let nearestDistance = Infinity;
+  for (const endpoint of endpointCandidates(kind)) {
+    const distance = endpoint.distanceTo(point);
+    if (distance < nearestDistance && distance <= threshold) {
+      nearestEndpoint = endpoint;
+      nearestDistance = distance;
+    }
+  }
+  if (nearestEndpoint) {
+    point.copy(nearestEndpoint);
+    reason = 'encaixado ao canto existente';
+  } else if (kind === 'wall') {
+    const nearestWall = findNearestWall(point, world, threshold);
+    if (nearestWall) {
+      point.copy(nearestWall.point);
+      point.x = round(point.x, 3);
+      point.z = round(point.z, 3);
+      reason = 'encaixado à parede existente';
+    }
+  }
+
+  if (start && point.distanceTo(start) > 0.01 && !nearestEndpoint && reason !== 'encaixado à parede existente') {
+    const dx = point.x - start.x;
+    const dz = point.z - start.z;
+    if (Math.abs(dx) < threshold) {
+      point.x = start.x;
+      reason = 'alinhado na vertical';
+    } else if (Math.abs(dz) < threshold) {
+      point.z = start.z;
+      reason = 'alinhado na horizontal';
     } else {
-      createWall(wallStart, point);
-      wallStart = null;
-      setBuilderStatus('Parede criada. Clique novamente para iniciar outra.');
+      const length = Math.hypot(dx, dz);
+      const angle = Math.atan2(dz, dx);
+      const snappedAngle = Math.round(angle / (Math.PI / 12)) * (Math.PI / 12);
+      if (Math.abs(angle - snappedAngle) < THREE.MathUtils.degToRad(5.5)) {
+        point.x = start.x + Math.cos(snappedAngle) * length;
+        point.z = start.z + Math.sin(snappedAngle) * length;
+        point.x = snapGrid(point.x);
+        point.z = snapGrid(point.z);
+        reason = 'ângulo ajustado';
+      }
+    }
+  }
+
+  return { point, reason: reason || 'encaixado na grade' };
+}
+
+function clearPreview() {
+  while (previewLayer.children.length) {
+    const child = previewLayer.children[0];
+    previewLayer.remove(child);
+    disposeRoot(child);
+  }
+  previewObject = null;
+  measurementBadge.classList.add('hidden');
+}
+
+function showSegmentPreview(start, end, kind, reason = '') {
+  clearPreview();
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
+  const length = Math.hypot(dx, dz);
+  if (length < 0.02) return;
+  const width = kind === 'wall' ? settings.wallDepth : kind === 'road' ? settings.roadWidth : 1.5;
+  const height = kind === 'wall' ? settings.wallHeight : 0.05;
+  const material = new THREE.MeshBasicMaterial({ color: 0xffdd63, transparent: true, opacity: 0.5, depthTest: false });
+  previewObject = new THREE.Mesh(new THREE.BoxGeometry(length, height, width), material);
+  previewObject.position.set((start.x + end.x) / 2, kind === 'wall' ? height / 2 : 0.06, (start.z + end.z) / 2);
+  previewObject.rotation.y = -Math.atan2(dz, dx);
+  previewObject.renderOrder = 40;
+  previewLayer.add(previewObject);
+  const angle = ((THREE.MathUtils.radToDeg(Math.atan2(dz, dx)) % 360) + 360) % 360;
+  measurementBadge.textContent = `${length.toFixed(2)} m · ${angle.toFixed(0)}°${reason ? ` · ${reason}` : ''}`;
+  measurementBadge.classList.remove('hidden');
+}
+
+function setTool(tool) {
+  currentTool = tool;
+  segmentStart = null;
+  cableStart = null;
+  clearPreview();
+  $$('[data-tool]').forEach((button) => button.classList.toggle('active', button.dataset.tool === tool));
+  if (tool === 'select') setBuilderStatus('Selecione objetos. Shift seleciona vários.');
+  else if (['wall', 'road', 'sidewalk'].includes(tool)) setBuilderStatus(`Clique no início e no final: ${objectLabel(tool)}.`);
+  else if (tool === 'cable') setBuilderStatus('Clique no primeiro e depois no segundo equipamento de rede.');
+}
+
+function addOpening(kind, point) {
+  const root = createObject(kind, point, {});
+  world.add(root);
+  const result = snapOpeningToWall(root, world, point, { maxDistance: 1.8, grid: settings.grid });
+  if (!result.ok) {
+    world.remove(root);
+    disposeRoot(root);
+    setBuilderStatus(`${objectLabel(kind)} não adicionada: ${result.reason}`);
+    return;
+  }
+  selectOnly(root);
+  commitHistory(`${objectLabel(kind)} adicionada`);
+  setBuilderStatus(result.adjusted ? 'A abertura foi reposicionada automaticamente para caber na parede.' : `${objectLabel(kind)} encaixada na parede.`);
+}
+
+function createSegmentTool(kind, start, end) {
+  const length = start.distanceTo(end);
+  if (length < Math.max(0.3, settings.grid)) {
+    setBuilderStatus('O segmento ficou pequeno demais. Tente novamente.');
+    return;
+  }
+  let root;
+  if (kind === 'wall') root = createWall(start, end, { height: settings.wallHeight, thickness: settings.wallDepth, world });
+  else if (kind === 'road') root = createRoad(start, end, { width: settings.roadWidth });
+  else root = createSidewalk(start, end, { width: 1.5 });
+  addRoot(root, `${objectLabel(kind)} criada`);
+}
+
+function handleCableClick(root) {
+  if (!root || !NETWORK_KINDS.has(root.userData.kind)) {
+    setBuilderStatus('Escolha um equipamento ou ponto de rede.');
+    return;
+  }
+  if (!cableStart) {
+    cableStart = root;
+    selectOnly(root);
+    setBuilderStatus(`Origem: ${root.userData.meta?.name || objectLabel(root.userData.kind)}. Escolha o destino.`);
+    return;
+  }
+  if (root === cableStart) {
+    setBuilderStatus('Escolha um equipamento diferente.');
+    return;
+  }
+  const exists = world.children.some((item) => item.userData.kind === 'cable' && ((item.userData.fromId === cableStart.userData.objectId && item.userData.toId === root.userData.objectId) || (item.userData.toId === cableStart.userData.objectId && item.userData.fromId === root.userData.objectId)));
+  if (exists) {
+    setBuilderStatus('Esses dois equipamentos já possuem um cabo.');
+    cableStart = null;
+    return;
+  }
+  const cable = createCable(cableStart, root, { world });
+  world.add(cable);
+  selectOnly(cable);
+  cableStart = null;
+  commitHistory('Cabo conectado');
+  setBuilderStatus('Cabo de rede conectado.');
+}
+
+renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
+renderer.domElement.addEventListener('pointerdown', (event) => {
+  if (appMode !== 'builder' || transform.dragging || transform.axis || event.button !== 0) return;
+  const root = pickedRoot(event);
+
+  if (['wall', 'road', 'sidewalk'].includes(currentTool)) {
+    const raw = groundPoint(event);
+    if (!raw) return;
+    const snapped = smartSnapPoint(raw, segmentStart, currentTool);
+    if (!segmentStart) {
+      segmentStart = snapped.point;
+      setBuilderStatus('Agora clique no ponto final.');
+    } else {
+      createSegmentTool(currentTool, segmentStart, snapped.point);
+      segmentStart = null;
+      clearPreview();
+      setBuilderStatus(`${objectLabel(currentTool)} criada. Clique para iniciar outra.`);
     }
     return;
   }
-  if (currentTool.startsWith('add:')) {
-    const point = groundPoint(event);
-    if (!point) return;
-    point.set(Math.round(point.x * 4) / 4, 0, Math.round(point.z * 4) / 4);
-    createByKind(currentTool.slice(4), point);
-    setTool('select');
-    setBuilderStatus('Objeto adicionado.');
+
+  if (currentTool === 'cable') {
+    handleCableClick(root);
     return;
   }
-  selectObject(pickedRoot(event));
+
+  if (currentTool.startsWith('add:')) {
+    const kind = currentTool.slice(4);
+    const raw = groundPoint(event);
+    if (!raw) return;
+    const point = smartSnapPoint(raw, null, kind).point;
+    if (OPENING_KINDS.has(kind)) addOpening(kind, point);
+    else {
+      const created = createObject(kind, point, {});
+      if (created) addRoot(created, `${objectLabel(kind)} adicionado`);
+    }
+    setTool('select');
+    return;
+  }
+
+  selectObject(root, event.shiftKey);
 });
+
+renderer.domElement.addEventListener('pointermove', (event) => {
+  if (appMode !== 'builder' || !segmentStart || !['wall', 'road', 'sidewalk'].includes(currentTool)) return;
+  const raw = groundPoint(event);
+  if (!raw) return;
+  const snapped = smartSnapPoint(raw, segmentStart, currentTool);
+  showSegmentPreview(segmentStart, snapped.point, currentTool, snapped.reason);
+});
+
+transform.addEventListener('dragging-changed', (event) => {
+  const enabled = !event.value && appMode === 'builder';
+  if (builderView === 'top') mapControls.enabled = enabled;
+  else perspectiveControls.enabled = enabled;
+});
+
+transform.addEventListener('mouseDown', () => {
+  if (!selected) return;
+  transformStartState = {
+    segment: snapshotSegment(selected),
+    position: selected.position.clone(),
+    rotation: selected.rotation.clone(),
+    hostWallId: selected.userData.hostWallId || '',
+  };
+});
+
+transform.addEventListener('objectChange', () => {
+  refreshSelectionHelpers();
+  syncPropertiesForm();
+  updateAllCables(world);
+});
+
+transform.addEventListener('mouseUp', () => {
+  if (!selected || !transformStartState) return;
+  if (SEGMENT_KINDS.has(selected.userData.kind)) {
+    applySegmentTransform(selected, transformStartState.segment, world);
+  } else if (OPENING_KINDS.has(selected.userData.kind)) {
+    const result = snapOpeningToWall(selected, world, selected.position, { maxDistance: 2.6, grid: settings.grid });
+    if (!result.ok) {
+      selected.position.copy(transformStartState.position);
+      selected.rotation.copy(transformStartState.rotation);
+      selected.userData.hostWallId = transformStartState.hostWallId;
+      const wall = world.children.find((item) => item.userData.objectId === selected.userData.hostWallId);
+      if (wall) rebuildWall(wall, world);
+      setBuilderStatus(result.reason);
+    } else if (result.adjusted) setBuilderStatus('A abertura foi ajustada para não sobrepor outra.');
+  } else {
+    selected.position.x = snapGrid(selected.position.x);
+    selected.position.z = snapGrid(selected.position.z);
+  }
+  transformStartState = null;
+  updateAllCables(world);
+  refreshSelectionHelpers();
+  syncPropertiesForm();
+  commitHistory('Objeto transformado');
+});
+
+function setBuilderView(view) {
+  builderView = view;
+  const target = selected ? selected.position : new THREE.Vector3(0, 0, 0);
+  if (view === 'top') {
+    activeBuilderCamera = topCamera;
+    topCamera.position.x = target.x;
+    topCamera.position.z = target.z + 0.01;
+    mapControls.target.set(target.x, 0, target.z);
+    mapControls.enabled = appMode === 'builder';
+    perspectiveControls.enabled = false;
+  } else {
+    activeBuilderCamera = gameCamera;
+    if (gameCamera.position.y < 2.5) gameCamera.position.set(target.x + 12, 12, target.z + 15);
+    perspectiveControls.target.copy(target);
+    perspectiveControls.enabled = appMode === 'builder';
+    mapControls.enabled = false;
+  }
+  transform.camera = activeBuilderCamera;
+  attachTransform();
+  $('#topView').classList.toggle('active', view === 'top');
+  $('#perspectiveView').classList.toggle('active', view === 'perspective');
+}
 
 function showHome() {
   appMode = 'home';
   document.exitPointerLock?.();
-  orbit.enabled = false;
+  mapControls.enabled = false;
+  perspectiveControls.enabled = false;
   transform.detach();
   homeOverlay.classList.remove('hidden');
   builderUi.classList.add('hidden');
   gameUi.classList.add('hidden');
   grid.visible = true;
   referenceLayer.visible = true;
+  helperLayer.visible = true;
   disconnectRealtime();
 }
 
@@ -616,100 +1211,47 @@ function openBuilder() {
   homeOverlay.classList.add('hidden');
   builderUi.classList.remove('hidden');
   gameUi.classList.add('hidden');
-  grid.visible = true;
+  grid.visible = $('#showGrid').checked;
   referenceLayer.visible = true;
-  orbit.enabled = true;
-  camera.position.set(15, 15, 18);
-  orbit.target.set(0, 0, 0);
-  orbit.update();
-  if (selected) transform.attach(selected);
-  setBuilderStatus('Modo selecionar.');
+  helperLayer.visible = true;
+  setBuilderView(builderView);
+  attachTransform();
+  setTool('select');
 }
 
 function openEquipment(meta) {
   $('#modalName').textContent = meta.name || 'Equipamento';
   $('#modalSector').textContent = meta.sector || '-';
   $('#modalIp').textContent = meta.ip || '-';
+  $('#modalMask').textContent = meta.mask || '-';
+  $('#modalGateway').textContent = meta.gateway || '-';
   $('#modalSwitch').textContent = meta.switchName || '-';
   $('#modalPort').textContent = meta.port || '-';
+  $('#modalNotes').textContent = meta.notes || '';
   $('#equipmentModal').classList.add('open');
   document.exitPointerLock?.();
 }
 
 function closeEquipment() {
   $('#equipmentModal').classList.remove('open');
-  if (appMode === 'game') renderer.domElement.requestPointerLock?.();
+  if (appMode === 'game') pointerControls.lock();
 }
 
-function showToast(message) {
-  toast.textContent = message;
-  toast.classList.add('visible');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove('visible'), 2200);
-}
-
-function makeNameSprite(name) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 128;
-  const context = canvas.getContext('2d');
-  context.font = '700 52px Arial';
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-  context.lineWidth = 10;
-  context.strokeStyle = 'rgba(0,0,0,.75)';
-  context.strokeText(name, 256, 64);
-  context.fillStyle = '#fff';
-  context.fillText(name, 256, 64);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
-  sprite.position.y = 2.12;
-  sprite.scale.set(3.6, .9, 1);
-  return sprite;
-}
-
-function makeAvatar(player) {
-  const root = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(.34, .68, 5, 10),
-    makeMaterial(player.color ?? 0x397bc5),
-  );
-  body.position.y = .95;
-  root.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(.25, 16, 12), makeMaterial(0xe1b58d));
-  head.position.y = 1.65;
-  root.add(head);
-  root.add(makeNameSprite(player.name || 'Visitante'));
-  root.position.set(player.x || 0, 0, player.z || 0);
-  root.userData.targetPosition = root.position.clone();
-  root.userData.targetRotation = player.ry || 0;
+function makeRemoteAvatar(player) {
+  const root = createAvatar(player);
   avatarLayer.add(root);
   return root;
 }
 
-function updatePlayersList() {
-  const items = [];
-  if (localPlayer) items.push(`${localPlayer.name} (você)`);
-  for (const player of remotePlayers.values()) items.push(player.userData.playerName || 'Visitante');
-  playersList.innerHTML = items.sort().map((name) => `<li>${escapeHtml(name)}</li>`).join('');
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-}
-
 function upsertRemote(player) {
-  if (!player || player.id === localPlayer?.id) return;
+  if (!player?.id || player.id === localPlayer?.id) return;
   let avatar = remotePlayers.get(player.id);
   if (!avatar) {
-    avatar = makeAvatar(player);
-    avatar.userData.playerName = player.name || 'Visitante';
+    avatar = makeRemoteAvatar(player);
     remotePlayers.set(player.id, avatar);
     showToast(`${player.name || 'Uma pessoa'} entrou`);
   }
-  avatar.userData.targetPosition.set(player.x || 0, 0, player.z || 0);
-  avatar.userData.targetRotation = player.ry || 0;
+  applyAvatarState(avatar, player);
   updatePlayersList();
 }
 
@@ -717,14 +1259,25 @@ function removeRemote(id) {
   const avatar = remotePlayers.get(id);
   if (!avatar) return;
   avatarLayer.remove(avatar);
+  disposeRoot(avatar);
   remotePlayers.delete(id);
   updatePlayersList();
 }
 
 function clearAvatars() {
-  while (avatarLayer.children.length) avatarLayer.remove(avatarLayer.children[0]);
+  for (const avatar of [...avatarLayer.children]) {
+    avatarLayer.remove(avatar);
+    disposeRoot(avatar);
+  }
   remotePlayers.clear();
   updatePlayersList();
+}
+
+function updatePlayersList() {
+  const items = [];
+  if (localPlayer) items.push(`${localPlayer.name} (você)`);
+  for (const avatar of remotePlayers.values()) items.push(avatar.userData.playerName || 'Visitante');
+  playersList.innerHTML = items.sort().map((name) => `<li>${escapeHtml(name)}</li>`).join('');
 }
 
 function flattenPresenceState(state) {
@@ -739,10 +1292,7 @@ function syncPresencePlayers() {
     seen.add(player.id);
     upsertRemote(player);
   }
-  for (const id of [...remotePlayers.keys()]) {
-    if (!seen.has(id)) removeRemote(id);
-  }
-  updatePlayersList();
+  for (const id of [...remotePlayers.keys()]) if (!seen.has(id)) removeRemote(id);
 }
 
 async function broadcast(event, payload) {
@@ -760,15 +1310,13 @@ function disconnectRealtime() {
 }
 
 async function loadPublishedScene(room) {
-  if (!supabase) return { ok: false, reason: 'not-configured' };
-  const { data, error } = await supabase
-    .from('scenes')
-    .select('scene')
-    .eq('room_code', room)
-    .maybeSingle();
+  if (!supabase) return { ok: false, reason: 'Supabase não configurado.' };
+  const { data, error } = await supabase.from('scenes').select('scene').eq('room_code', room).maybeSingle();
   if (error) return { ok: false, reason: error.message };
-  if (!data || !Array.isArray(data.scene)) return { ok: false, reason: 'not-found' };
-  loadWorld(data.scene);
+  if (!data?.scene) return { ok: false, reason: 'not-found' };
+  const objects = Array.isArray(data.scene) ? data.scene : data.scene.objects;
+  if (!Array.isArray(objects)) return { ok: false, reason: 'Cenário incompatível.' };
+  loadWorld(objects);
   return { ok: true };
 }
 
@@ -777,59 +1325,50 @@ async function joinOnline(name, room) {
   joinButton.disabled = true;
   $('#onlineWarning').textContent = 'Entrando na sala...';
   disconnectRealtime();
-
   const loaded = await loadPublishedScene(room);
   if (!loaded.ok) {
     joinButton.disabled = false;
-    $('#onlineWarning').textContent = loaded.reason === 'not-found'
-      ? 'Essa sala ainda não possui um cenário publicado.'
-      : `Não foi possível carregar a sala: ${loaded.reason}`;
+    $('#onlineWarning').textContent = loaded.reason === 'not-found' ? 'Essa sala ainda não possui cenário publicado.' : `Não foi possível carregar: ${loaded.reason}`;
     return;
   }
 
   localStorage.setItem('empresa3d-name', name);
   localStorage.setItem('empresa3d-room', room);
   const spawnAngle = Math.random() * Math.PI * 2;
-  const spawnRadius = 1.5 + Math.random() * 2.5;
+  const spawnRadius = 1.4 + Math.random() * 2.2;
   localPlayer = {
     id: crypto.randomUUID(),
     name,
-    color: Math.floor(Math.random() * 0xffffff),
+    avatar: avatarConfig,
     x: Math.cos(spawnAngle) * spawnRadius,
     z: 12 + Math.sin(spawnAngle) * spawnRadius,
     ry: 0,
+    moving: false,
+    gesture: '',
   };
   currentRoom = room;
   realtimeChannel = supabase.channel(`empresa3d:${room}`, {
-    config: {
-      private: false,
-      broadcast: { self: false },
-      presence: { key: localPlayer.id },
-    },
+    config: { private: false, broadcast: { self: false }, presence: { key: localPlayer.id } },
   });
 
   realtimeChannel
     .on('presence', { event: 'sync' }, syncPresencePlayers)
     .on('presence', { event: 'join' }, syncPresencePlayers)
     .on('presence', { event: 'leave' }, syncPresencePlayers)
-    .on('broadcast', { event: 'player_state' }, ({ payload }) => {
-      upsertRemote(payload);
-    })
-    .on('broadcast', { event: 'player_move' }, ({ payload }) => {
-      upsertRemote(payload);
-    })
+    .on('broadcast', { event: 'player_state' }, ({ payload }) => upsertRemote(payload))
+    .on('broadcast', { event: 'player_move' }, ({ payload }) => upsertRemote(payload))
     .on('broadcast', { event: 'request_state' }, ({ payload }) => {
-      if (localPlayer && payload?.requesterId !== localPlayer.id) {
-        broadcast('player_state', localPlayer).catch(() => {});
-      }
+      if (localPlayer && payload?.requesterId !== localPlayer.id) broadcast('player_state', localPlayer).catch(() => {});
     })
-    .on('broadcast', { event: 'door' }, ({ payload }) => {
-      const door = world.children.find((root) => root.userData.objectId === payload?.objectId && root.userData.kind === 'door');
-      if (door) setDoorOpen(door, Boolean(payload.open), false);
+    .on('broadcast', { event: 'gesture' }, ({ payload }) => upsertRemote(payload))
+    .on('broadcast', { event: 'opening' }, ({ payload }) => {
+      const opening = world.children.find((root) => root.userData.objectId === payload?.objectId);
+      if (opening) setOpeningOpen(opening, Boolean(payload.open));
     })
     .on('broadcast', { event: 'scene_published' }, ({ payload }) => {
-      if (Array.isArray(payload?.scene)) {
-        loadWorld(payload.scene);
+      const objects = Array.isArray(payload?.scene) ? payload.scene : payload?.scene?.objects;
+      if (Array.isArray(objects)) {
+        loadWorld(objects);
         showToast('O cenário foi atualizado.');
       }
     })
@@ -844,31 +1383,32 @@ async function joinOnline(name, room) {
         showToast(`Sala online: ${room}`);
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
         joinButton.disabled = false;
-        $('#onlineWarning').textContent = `Não foi possível entrar na sala${error?.message ? `: ${error.message}` : '.'}`;
+        $('#onlineWarning').textContent = `Não foi possível entrar${error?.message ? `: ${error.message}` : '.'}`;
         disconnectRealtime();
       }
     });
 }
 
-async function publishCurrentScene(room) {
+async function publishCurrentScene(room, pin) {
   if (!supabase) return;
-  const normalizedRoom = room.trim().replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 50);
-  if (!normalizedRoom) {
-    setBuilderStatus('Digite um código de sala.');
-    return;
-  }
+  const normalizedRoom = normalizeRoom(room);
+  if (!normalizedRoom) return setBuilderStatus('Digite um código de sala.');
+  if (String(pin || '').length < 4) return setBuilderStatus('Crie uma senha de edição com pelo menos 4 caracteres.');
 
   publishButton.disabled = true;
   setBuilderStatus('Publicando cenário...');
   localStorage.setItem('empresa3d-room', normalizedRoom);
   const sceneData = serializeWorld();
-  const { error } = await supabase
-    .from('scenes')
-    .upsert({
-      room_code: normalizedRoom,
-      scene: sceneData,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'room_code' });
+
+  let error = null;
+  const rpcResult = await supabase.rpc('publish_scene', { p_room: normalizedRoom, p_pin: pin, p_scene: sceneData });
+  error = rpcResult.error;
+
+  if (error && /function|schema cache|publish_scene/i.test(error.message || '')) {
+    const fallback = await supabase.from('scenes').upsert({ room_code: normalizedRoom, scene: sceneData, updated_at: new Date().toISOString() }, { onConflict: 'room_code' });
+    error = fallback.error;
+    if (!error) setBuilderStatus('Publicado. Execute o SQL v2 para ativar a senha de edição.');
+  }
 
   if (error) {
     publishButton.disabled = false;
@@ -876,9 +1416,7 @@ async function publishCurrentScene(room) {
     return;
   }
 
-  const publisher = supabase.channel(`empresa3d:${normalizedRoom}`, {
-    config: { private: false, broadcast: { self: false } },
-  });
+  const publisher = supabase.channel(`empresa3d:${normalizedRoom}`, { config: { private: false, broadcast: { self: false } } });
   publisher.subscribe(async (status) => {
     if (status !== 'SUBSCRIBED') return;
     await publisher.send({ type: 'broadcast', event: 'scene_published', payload: { scene: sceneData } });
@@ -889,18 +1427,14 @@ async function publishCurrentScene(room) {
 }
 
 function startSoloGame() {
-  localPlayer = { id: crypto.randomUUID(), name: 'Você' };
   disconnectRealtime();
-  localPlayer = { id: crypto.randomUUID(), name: 'Você' };
+  localPlayer = { id: crypto.randomUUID(), name: 'Você', avatar: avatarConfig, x: 0, z: 12, ry: 0, moving: false };
   startGame();
 }
 
 function startGame() {
   for (const root of world.children) {
-    if (root.userData.kind === 'door') {
-      root.userData.open = false;
-      root.userData.closedRotation = root.rotation.y;
-    }
+    if (['door', 'slidingGate'].includes(root.userData.kind)) setOpeningOpen(root, false);
   }
   appMode = 'game';
   homeOverlay.classList.add('hidden');
@@ -908,70 +1442,149 @@ function startGame() {
   gameUi.classList.remove('hidden');
   grid.visible = false;
   referenceLayer.visible = false;
-  orbit.enabled = false;
+  helperLayer.visible = false;
+  mapControls.enabled = false;
+  perspectiveControls.enabled = false;
   transform.detach();
-  camera.position.set(localPlayer?.x ?? 0, 1.7, localPlayer?.z ?? 12);
-  camera.rotation.set(0, localPlayer?.ry ?? 0, 0);
+  gameCamera.position.set(localPlayer?.x ?? 0, 1.7, localPlayer?.z ?? 12);
+  gameCamera.rotation.set(0, localPlayer?.ry ?? 0, 0);
   updatePlayersList();
-  setTimeout(() => renderer.domElement.requestPointerLock?.(), 80);
+  setTimeout(() => pointerControls.lock(), 100);
 }
 
-function setDoorOpen(door, open, sendOnline = true) {
-  door.userData.closedRotation ??= door.rotation.y;
-  door.userData.open = open;
-  door.rotation.y = door.userData.closedRotation + (open ? -Math.PI / 2 : 0);
-  if (sendOnline) broadcast('door', { objectId: door.userData.objectId, open }).catch(() => {});
+function collisionMeshes(root) {
+  if (root.userData.kind === 'wall') return root.children.filter((child) => child.isMesh);
+  if (root.userData.kind === 'door' || root.userData.kind === 'slidingGate') {
+    return root.userData.openProgress > 0.72 ? [] : root.userData.movingPart?.children?.filter((child) => child.isMesh) || [];
+  }
+  if (['table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer'].includes(root.userData.kind)) return [root];
+  return [];
 }
 
 function collides(position) {
   const playerBox = new THREE.Box3(
-    new THREE.Vector3(position.x - .32, .1, position.z - .32),
-    new THREE.Vector3(position.x + .32, 1.85, position.z + .32),
+    new THREE.Vector3(position.x - 0.29, 0.08, position.z - 0.29),
+    new THREE.Vector3(position.x + 0.29, 1.82, position.z + 0.29),
   );
   for (const root of world.children) {
-    const kind = root.userData.kind;
-    if (kind !== 'wall' && !(kind === 'door' && !root.userData.open)) continue;
-    const box = new THREE.Box3().setFromObject(root);
-    if (box.intersectsBox(playerBox)) return true;
+    for (const object of collisionMeshes(root)) {
+      const box = new THREE.Box3().setFromObject(object);
+      if (box.intersectsBox(playerBox)) return true;
+    }
   }
   return false;
 }
 
-function gameInteraction() {
-  raycaster.setFromCamera(centerPointer, camera);
-  const hit = raycaster.intersectObjects(world.children, true)[0];
-  if (!hit || hit.distance > 4.2) return;
-  const root = hit.object.userData.root;
-  if (!root) return;
-  if (root.userData.kind === 'door') {
-    setDoorOpen(root, !root.userData.open, true);
-  } else if (['computer', 'network', 'switch', 'printer'].includes(root.userData.kind)) {
-    openEquipment(root.userData.meta || {});
+function findGameInteraction() {
+  raycaster.setFromCamera(centerPointer, gameCamera);
+  const hit = raycaster.intersectObjects(world.children, true).find((item) => {
+    const root = item.object?.userData?.root;
+    return item.distance <= 4.2 && root && (['door', 'slidingGate'].includes(root.userData.kind) || NETWORK_KINDS.has(root.userData.kind));
+  });
+  const root = hit?.object?.userData?.root || null;
+  interactionRoot = root;
+  if (!root) {
+    interactionHint.textContent = '';
+    return;
   }
+  if (['door', 'slidingGate'].includes(root.userData.kind)) interactionHint.textContent = `E: ${root.userData.open ? 'fechar' : 'abrir'} ${objectLabel(root.userData.kind).toLowerCase()}`;
+  else if (NETWORK_KINDS.has(root.userData.kind)) interactionHint.textContent = `E: consultar ${root.userData.meta?.name || objectLabel(root.userData.kind)}`;
+  else interactionHint.textContent = '';
+}
+
+function gameInteraction() {
+  const root = interactionRoot;
+  if (!root) return;
+  if (['door', 'slidingGate'].includes(root.userData.kind)) {
+    setOpeningOpen(root, !root.userData.open);
+    broadcast('opening', { objectId: root.userData.objectId, open: root.userData.open }).catch(() => {});
+  } else if (NETWORK_KINDS.has(root.userData.kind)) openEquipment(root.userData.meta || {});
+}
+
+function sendGesture(type) {
+  if (!localPlayer || appMode !== 'game') return;
+  localPlayer = { ...localPlayer, gesture: type };
+  broadcast('gesture', localPlayer).catch(() => {});
+  setTimeout(() => { if (localPlayer) localPlayer.gesture = ''; }, 1600);
+}
+
+function initAvatarPreview() {
+  const container = $('#avatarPreview');
+  const previewRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  previewRenderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  previewRenderer.setSize(210, 220);
+  previewRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  container.appendChild(previewRenderer.domElement);
+  const previewScene = new THREE.Scene();
+  const previewCamera = new THREE.PerspectiveCamera(34, 210 / 220, 0.1, 20);
+  previewCamera.position.set(0, 1.35, 4.7);
+  previewCamera.lookAt(0, 1.05, 0);
+  previewScene.add(new THREE.HemisphereLight(0xffffff, 0x4b514c, 2.8));
+  const light = new THREE.DirectionalLight(0xffffff, 2.2);
+  light.position.set(2, 4, 3);
+  previewScene.add(light);
+  let previewAvatar = createAvatar({ name: '', avatar: avatarConfig }, { showName: false });
+  previewScene.add(previewAvatar);
+
+  const update = () => {
+    previewScene.remove(previewAvatar);
+    disposeRoot(previewAvatar);
+    previewAvatar = createAvatar({ name: '', avatar: avatarConfig }, { showName: false });
+    previewScene.add(previewAvatar);
+  };
+  for (const input of Object.values(avatarInputs)) input.addEventListener('input', () => {
+    avatarConfig = sanitizeAvatar(Object.fromEntries(Object.entries(avatarInputs).map(([key, element]) => [key, element.value])));
+    localStorage.setItem('empresa3d-avatar', JSON.stringify(avatarConfig));
+    update();
+  });
+
+  function renderPreview(time) {
+    previewAvatar.rotation.y = Math.sin(time * 0.00045) * 0.35;
+    updateAvatar(previewAvatar, 0.016, time * 0.001);
+    previewRenderer.render(previewScene, previewCamera);
+    requestAnimationFrame(renderPreview);
+  }
+  requestAnimationFrame(renderPreview);
 }
 
 $('#openBuilder').addEventListener('click', openBuilder);
 $('#homeFromBuilder').addEventListener('click', showHome);
+$('#topView').addEventListener('click', () => setBuilderView('top'));
+$('#perspectiveView').addEventListener('click', () => setBuilderView('perspective'));
 $('#soloTest').addEventListener('click', startSoloGame);
-$('#saveProject').addEventListener('click', saveLocal);
-$('#publishScene').addEventListener('click', () => publishCurrentScene(publishRoom.value));
+$('#undoAction').addEventListener('click', undo);
+$('#redoAction').addEventListener('click', redo);
+$('#saveProject').addEventListener('click', saveLocalVersion);
+$('#publishScene').addEventListener('click', () => publishCurrentScene($('#publishRoom').value, $('#publishPin').value));
 $('#joinRoomButton').addEventListener('click', () => {
-  const name = joinName.value.trim() || 'Visitante';
-  const room = joinRoom.value.trim().replace(/[^a-zA-Z0-9_-]/g, '-');
+  const name = $('#joinName').value.trim() || 'Visitante';
+  const room = normalizeRoom($('#joinRoom').value);
   if (!room) return alert('Digite o código da sala.');
   joinOnline(name, room);
 });
 $('#exitGame').addEventListener('click', showHome);
 $('#closeModal').addEventListener('click', closeEquipment);
+$('#applyProperties').addEventListener('click', applyProperties);
+$('#duplicateObject').addEventListener('click', duplicateSelection);
+$('#deleteObject').addEventListener('click', () => removeRoots([...selectedRoots]));
+$('#reattachOpening').addEventListener('click', () => {
+  if (!selected || !OPENING_KINDS.has(selected.userData.kind)) return;
+  detachOpening(selected, world);
+  const result = snapOpeningToWall(selected, world, selected.position, { maxDistance: 5, grid: settings.grid });
+  setBuilderStatus(result.ok ? 'Abertura reencaixada.' : result.reason);
+  commitHistory('Abertura reencaixada');
+});
 
 $('#exportProject').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify(serializeWorld(), null, 2)], { type: 'application/json' });
+  const payload = { version: 2, exportedAt: new Date().toISOString(), objects: serializeWorld() };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
-  link.download = 'empresa-3d.json';
+  link.download = 'empresa-3d-inteligente.json';
   link.click();
   URL.revokeObjectURL(link.href);
 });
+
 $('#importProject').addEventListener('click', () => $('#importFile').click());
 $('#importFile').addEventListener('change', (event) => {
   const file = event.target.files?.[0];
@@ -980,12 +1593,24 @@ $('#importFile').addEventListener('change', (event) => {
   reader.onload = () => {
     try {
       loadWorld(JSON.parse(String(reader.result)));
-      saveLocal();
+      commitHistory('Projeto importado');
+      saveLocalVersion();
     } catch {
       alert('O arquivo selecionado não é um projeto válido.');
     }
   };
   reader.readAsText(file);
+  event.target.value = '';
+});
+
+$('#restoreVersion').addEventListener('click', () => {
+  const id = $('#versionSelect').value;
+  const versions = JSON.parse(localStorage.getItem('empresa3d-versions-v2') || '[]');
+  const version = versions.find((item) => item.id === id);
+  if (!version) return;
+  loadWorld(version.objects);
+  commitHistory('Versão restaurada');
+  setBuilderStatus('Versão restaurada.');
 });
 
 $('#choosePlan').addEventListener('click', () => $('#planFile').click());
@@ -994,128 +1619,188 @@ $('#planFile').addEventListener('change', (event) => {
   if (!file) return;
   const objectUrl = URL.createObjectURL(file);
   new THREE.TextureLoader().load(objectUrl, (texture) => {
-    while (referenceLayer.children.length) referenceLayer.remove(referenceLayer.children[0]);
+    while (referenceLayer.children.length) {
+      const child = referenceLayer.children[0];
+      referenceLayer.remove(child);
+      disposeRoot(child);
+    }
     const ratio = texture.image.width / texture.image.height;
     referencePlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(22 * ratio, 22),
-      new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: Number($('#planOpacity').value), side: THREE.DoubleSide }),
+      new THREE.PlaneGeometry(ratio, 1),
+      new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: Number($('#planOpacity').value), side: THREE.DoubleSide, depthWrite: false }),
     );
     referencePlane.rotation.x = -Math.PI / 2;
-    referencePlane.position.y = .025;
+    referencePlane.position.y = 0.018;
     referenceLayer.add(referencePlane);
+    updatePlanTransform();
     URL.revokeObjectURL(objectUrl);
   });
 });
-$('#planOpacity').addEventListener('input', (event) => {
-  if (referencePlane) referencePlane.material.opacity = Number(event.target.value);
-});
 
-document.querySelectorAll('[data-tool]').forEach((button) => button.addEventListener('click', () => {
-  setTool(button.dataset.tool);
-  setBuilderStatus(button.dataset.tool === 'wall' ? 'Clique no início e no final da parede.' : 'Modo selecionar.');
+function updatePlanTransform() {
+  if (!referencePlane) return;
+  const scale = Math.max(1, Number($('#planScale').value) || 25);
+  referencePlane.scale.set(scale, scale, scale);
+  referencePlane.rotation.z = THREE.MathUtils.degToRad(Number($('#planRotation').value) || 0);
+  referencePlane.material.opacity = Number($('#planOpacity').value);
+}
+$('#planOpacity').addEventListener('input', updatePlanTransform);
+$('#planScale').addEventListener('input', updatePlanTransform);
+$('#planRotation').addEventListener('input', updatePlanTransform);
+
+$$('[data-tab]').forEach((button) => button.addEventListener('click', () => {
+  $$('[data-tab]').forEach((item) => item.classList.toggle('active', item === button));
+  $$('.tool-section').forEach((section) => section.classList.toggle('active', section.dataset.section === button.dataset.tab));
 }));
-document.querySelectorAll('[data-add]').forEach((button) => button.addEventListener('click', () => {
+
+$$('[data-tool]').forEach((button) => button.addEventListener('click', () => setTool(button.dataset.tool)));
+$$('[data-add]').forEach((button) => button.addEventListener('click', () => {
   currentTool = `add:${button.dataset.add}`;
-  wallStart = null;
-  document.querySelectorAll('[data-tool]').forEach((item) => item.classList.remove('active'));
-  setBuilderStatus(`Clique no piso para adicionar ${defaultName(button.dataset.add)}.`);
+  segmentStart = null;
+  cableStart = null;
+  clearPreview();
+  $$('[data-tool]').forEach((item) => item.classList.remove('active'));
+  setBuilderStatus(OPENING_KINDS.has(button.dataset.add)
+    ? `Clique perto de uma parede para encaixar ${objectLabel(button.dataset.add).toLowerCase()}.`
+    : `Clique no piso para adicionar ${objectLabel(button.dataset.add).toLowerCase()}.`);
 }));
-document.querySelectorAll('[data-transform]').forEach((button) => button.addEventListener('click', () => transform.setMode(button.dataset.transform)));
 
-$('#deleteObject').addEventListener('click', () => {
-  if (!selected) return;
-  transform.detach();
-  world.remove(selected);
-  selectObject(null);
+$$('[data-transform]').forEach((button) => button.addEventListener('click', () => {
+  transform.setMode(button.dataset.transform);
+  $$('[data-transform]').forEach((item) => item.classList.toggle('active', item === button));
+}));
+
+$('#gridSize').addEventListener('change', (event) => {
+  settings.grid = Number(event.target.value);
+  transform.setTranslationSnap(settings.grid);
 });
-$('#duplicateObject').addEventListener('click', () => {
-  if (!selected) return;
-  const data = serializeWorld().find((item) => item.id === selected.userData.objectId);
-  if (!data) return;
-  data.id = crypto.randomUUID();
-  data.position[0] += 1;
-  createFromData(data);
-});
-$('#applyProperties').addEventListener('click', () => {
-  if (!selected) return;
-  selected.userData.meta = {
-    name: $('#objectName').value,
-    sector: $('#objectSector').value,
-    ip: $('#objectIp').value,
-    switchName: $('#objectSwitch').value,
-    port: $('#objectPort').value,
-  };
-  applyColor(selected, $('#objectColor').value);
-  setBuilderStatus('Informações aplicadas.');
+$('#smartSnap').addEventListener('change', (event) => { settings.smartSnap = event.target.checked; });
+$('#showGrid').addEventListener('change', (event) => { grid.visible = event.target.checked; });
+$('#wallHeightDefault').addEventListener('change', (event) => { settings.wallHeight = Math.max(1.8, Number(event.target.value) || 3); });
+$('#wallDepthDefault').addEventListener('change', (event) => { settings.wallDepth = Math.max(0.08, Number(event.target.value) || 0.16); });
+$('#roadWidthDefault').addEventListener('change', (event) => { settings.roadWidth = Math.max(2, Number(event.target.value) || 6); });
+
+$('#collapseTools').addEventListener('click', () => {
+  $('#toolPanel').classList.toggle('collapsed');
+  $('#collapseTools').textContent = $('#toolPanel').classList.contains('collapsed') ? '+' : '−';
 });
 
 renderer.domElement.addEventListener('click', () => {
-  if (appMode === 'game') {
-    if (!pointerControls.isLocked) pointerControls.lock();
-    else gameInteraction();
-  }
+  if (appMode !== 'game') return;
+  if (!pointerControls.isLocked) pointerControls.lock();
+  else gameInteraction();
 });
 
 addEventListener('keydown', (event) => {
   keys.add(event.code);
-  if (event.code === 'Escape' && appMode === 'game' && !$('#equipmentModal').classList.contains('open')) showHome();
+  if (appMode === 'builder') {
+    if ((event.ctrlKey || event.metaKey) && event.code === 'KeyZ') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
+    else if ((event.ctrlKey || event.metaKey) && event.code === 'KeyY') { event.preventDefault(); redo(); }
+    else if ((event.ctrlKey || event.metaKey) && event.code === 'KeyD') { event.preventDefault(); duplicateSelection(); }
+    else if (event.code === 'Delete' || event.code === 'Backspace') { if (selectedRoots.size && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) removeRoots([...selectedRoots]); }
+    else if (event.code === 'Escape') { setTool('select'); clearSelection(); }
+    else if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) {
+      event.preventDefault();
+      const step = settings.grid * (event.shiftKey ? 5 : 1);
+      if (event.code === 'ArrowUp') moveSelectedBy(0, -step);
+      if (event.code === 'ArrowDown') moveSelectedBy(0, step);
+      if (event.code === 'ArrowLeft') moveSelectedBy(-step, 0);
+      if (event.code === 'ArrowRight') moveSelectedBy(step, 0);
+    }
+  } else if (appMode === 'game' && !event.repeat) {
+    if (event.code === 'KeyE') gameInteraction();
+    if (event.code === 'Digit1') sendGesture('wave');
+    if (event.code === 'Digit2') sendGesture('point');
+  }
 });
 addEventListener('keyup', (event) => keys.delete(event.code));
 
-const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
-  const delta = Math.min(clock.getDelta(), .05);
-  if (appMode === 'builder') orbit.update();
-  if (appMode === 'game' && pointerControls.isLocked) {
+  const delta = Math.min(clock.getDelta(), 0.05);
+  elapsed += delta;
+
+  if (appMode === 'builder') {
+    if (builderView === 'top') mapControls.update();
+    else perspectiveControls.update();
+    for (const helper of selectionHelpers.values()) helper.update();
+  }
+
+  if (appMode === 'game') {
+    findGameInteraction();
     const forward = Number(keys.has('KeyW')) - Number(keys.has('KeyS'));
     const side = Number(keys.has('KeyD')) - Number(keys.has('KeyA'));
-    if (forward || side) {
+    const moving = Boolean(forward || side);
+    if (pointerControls.isLocked && moving) {
       const direction = new THREE.Vector3();
-      camera.getWorldDirection(direction);
+      gameCamera.getWorldDirection(direction);
       direction.y = 0;
       direction.normalize();
       const right = new THREE.Vector3().crossVectors(direction, new THREE.Vector3(0, 1, 0)).normalize();
-      const movement = direction.multiplyScalar(forward).add(right.multiplyScalar(side)).normalize().multiplyScalar(4.2 * delta);
-      const next = camera.position.clone().add(movement);
-      next.y = 1.7;
-      if (!collides(next)) camera.position.copy(next);
+      const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6.4 : 4.2;
+      const movement = direction.multiplyScalar(forward).add(right.multiplyScalar(side)).normalize().multiplyScalar(speed * delta);
+      const nextX = gameCamera.position.clone();
+      nextX.x += movement.x;
+      if (!collides(nextX)) gameCamera.position.x = nextX.x;
+      const nextZ = gameCamera.position.clone();
+      nextZ.z += movement.z;
+      if (!collides(nextZ)) gameCamera.position.z = nextZ.z;
+      gameCamera.position.y = 1.7;
     }
+
     const now = performance.now();
-    if (realtimeChannel && localPlayer && now - lastMoveSent > 80) {
-      const direction = new THREE.Vector3();
-      camera.getWorldDirection(direction);
+    if (realtimeChannel && localPlayer && now - lastMoveSent > 70) {
+      const look = new THREE.Vector3();
+      gameCamera.getWorldDirection(look);
       localPlayer = {
         ...localPlayer,
-        x: camera.position.x,
-        z: camera.position.z,
-        ry: Math.atan2(direction.x, direction.z),
+        x: gameCamera.position.x,
+        z: gameCamera.position.z,
+        ry: Math.atan2(look.x, look.z),
+        moving,
       };
-
-      // Broadcast é usado para movimento de baixa latência.
       broadcast('player_move', localPlayer).catch(() => {});
       lastMoveSent = now;
-
-      // Presence fica responsável principalmente por indicar quem está online.
-      if (now - lastPresenceSent > 1800) {
+      if (now - lastPresenceSent > 1700) {
         realtimeChannel.track(localPlayer).catch(() => {});
         lastPresenceSent = now;
       }
     }
   }
+
+  for (const root of world.children) updateOpeningAnimation(root, delta);
   for (const avatar of remotePlayers.values()) {
-    avatar.position.lerp(avatar.userData.targetPosition, .22);
-    avatar.rotation.y = THREE.MathUtils.lerp(avatar.rotation.y, avatar.userData.targetRotation, .22);
+    avatar.position.lerp(avatar.userData.targetPosition, 1 - Math.exp(-delta * 12));
+    let difference = avatar.userData.targetRotation - avatar.rotation.y;
+    difference = Math.atan2(Math.sin(difference), Math.cos(difference));
+    avatar.rotation.y += difference * (1 - Math.exp(-delta * 12));
+    updateAvatar(avatar, delta, elapsed);
   }
-  renderer.render(scene, camera);
+
+  const renderCamera = appMode === 'builder' ? activeBuilderCamera : gameCamera;
+  renderer.render(scene, renderCamera);
 }
 
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
+function updateCameraAspect() {
+  gameCamera.aspect = innerWidth / innerHeight;
+  gameCamera.updateProjectionMatrix();
+  const aspect = innerWidth / innerHeight;
+  topCamera.left = -topFrustum * aspect;
+  topCamera.right = topFrustum * aspect;
+  topCamera.top = topFrustum;
+  topCamera.bottom = -topFrustum;
+  topCamera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-});
+}
+addEventListener('resize', updateCameraAspect);
 
-restoreLocal();
+initAvatarPreview();
+updateVersionList();
+const restored = restoreLocal();
+if (!restored) {
+  addRoot(createRoad(new THREE.Vector3(-18, 0, 18), new THREE.Vector3(18, 0, 18), { width: 6 }), 'Cenário inicial');
+  clearSelection();
+}
+commitHistory('Estado inicial');
 showHome();
 animate();

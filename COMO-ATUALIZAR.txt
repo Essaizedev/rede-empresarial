@@ -1,0 +1,13 @@
+ATUALIZAÇÃO PARA A VERSÃO INTELIGENTE
+
+1. Substitua os arquivos do repositório pelos arquivos deste projeto.
+2. Não envie node_modules, dist ou package-lock.json antigo.
+3. No Supabase, abra SQL Editor > New query.
+4. Cole todo o conteúdo de supabase-setup-v2.sql e clique em Run.
+5. Mantenha na Vercel:
+   VITE_SUPABASE_URL
+   VITE_SUPABASE_PUBLISHABLE_KEY
+6. Faça um novo Redeploy sem reutilizar o cache.
+
+A primeira publicação de cada sala cria a senha de edição.
+Os alunos continuam entrando apenas com nome e código da sala.

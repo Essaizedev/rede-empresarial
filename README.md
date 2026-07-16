@@ -1,56 +1,88 @@
-# Empresa 3D — Vite + Three.js + Supabase
+# Empresa 3D Inteligente
 
-Não há cadastro nem login para alunos ou visitantes.
+Aplicação Vite + Three.js + Supabase para construir uma empresa em 3D e explorar o cenário online sem cadastro de visitantes.
 
-## Fluxo
+## Principais recursos
 
-1. **Construir sozinho:** abre o editor e salva no navegador.
-2. **Publicar cenário:** grava o cenário no Supabase usando um código de sala.
-3. **Entrar na sala:** o visitante informa somente nome e código da sala.
-4. **Tempo real:** Supabase Presence sincroniza os jogadores; Broadcast sincroniza portas e atualizações do cenário.
+### Construção precisa
+- vista superior ortográfica e vista 3D;
+- grade configurável de 10 cm, 25 cm, 50 cm ou 1 m;
+- encaixe automático em cantos e paredes existentes;
+- alinhamento horizontal, vertical e em ângulos próximos;
+- medida e ângulo exibidos durante o desenho;
+- posição, rotação e dimensões editáveis numericamente;
+- seleção múltipla com Shift;
+- mover com as setas, duplicar, bloquear, apagar, desfazer e refazer;
+- versões locais, importação e exportação em JSON.
 
-## 1. Criar o Supabase
+### Estrutura e área externa
+- paredes com aberturas reais;
+- portas e janelas que se encaixam e procuram espaço livre automaticamente;
+- portão deslizante para estacionamento;
+- ruas com faixas, calçadas, vagas e áreas verdes;
+- planta de referência com escala, rotação e opacidade.
 
-1. Crie um projeto no painel do Supabase.
-2. Abra **SQL Editor > New query**.
-3. Cole todo o conteúdo de `supabase-setup.sql` e clique em **Run**.
-4. Em **Project Settings > Realtime Settings**, mantenha o Realtime ativo e permita canais públicos.
-5. Abra o painel **Connect** ou **Settings > API Keys** e copie:
-   - Project URL
-   - Publishable key (`sb_publishable_...`)
+### Móveis e rede
+- mesas, cadeiras, armários e estantes;
+- computadores, notebooks, impressoras, pontos de rede, switches, roteadores, racks e servidores;
+- cabos entre equipamentos;
+- IP, máscara, gateway, MAC, switch e porta;
+- mapa de portas do switch;
+- avisos de IP duplicado, porta ocupada e equipamento sem IP.
 
-Nunca use a Secret key no navegador ou na Vercel deste projeto.
+### Avatares e multiplayer
+- personalização de pele, cabelo, camisa, calça e calçado;
+- avatares low-poly leves;
+- animação de caminhada, corrida e gestos;
+- nomes sobre os personagens;
+- posição sincronizada por Supabase Realtime;
+- portas e portões sincronizados;
+- entrada somente com nome e código da sala.
 
-## 2. Variáveis na Vercel
+## Atualização do Supabase
 
-No projeto da Vercel, abra **Settings > Environment Variables** e crie:
+Execute `supabase-setup-v2.sql` no SQL Editor do Supabase. Ele mantém a entrada sem login e adiciona uma senha apenas para quem publica ou substitui o cenário.
+
+A primeira publicação de uma sala define a senha de edição. Depois, a mesma senha será exigida para publicar novamente naquela sala.
+
+## Variáveis da Vercel
 
 ```text
 VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 ```
 
-Marque Production e Preview. Depois faça um novo deploy.
+Não use `/rest/v1/` na URL e não use a Secret key.
 
-## 3. Configuração Vercel
+## Publicação
+
+Configuração esperada na Vercel:
 
 ```text
-Framework Preset: Vite
-Root Directory: ./
-Install Command: padrão
+Framework: Vite
 Build Command: npm run build
 Output Directory: dist
-Node.js Version: 22.x
+Node.js: 22.x
 ```
 
-## 4. Teste
+O arquivo `vercel.json` já fixa o build correto.
 
-1. Abra **Construir sozinho**.
-2. Adicione uma parede ou equipamento.
-3. Digite `turma-0123` e clique em **Publicar cenário**.
-4. Abra duas janelas anônimas do site.
-5. Em cada janela, digite um nome diferente e a mesma sala `turma-0123`.
+## Controles
 
-## Observação de segurança
+### Construtor
+- Shift + clique: seleção múltipla;
+- setas: mover pela grade;
+- Shift + setas: mover cinco passos;
+- Ctrl+Z: desfazer;
+- Ctrl+Y: refazer;
+- Ctrl+D: duplicar;
+- Delete: apagar;
+- botão direito: mover a câmera superior ou girar a vista 3D.
 
-Este protótipo usa salas públicas porque os participantes não fazem login. Quem souber o código da sala poderá entrar, e quem acessar o construtor poderá publicar naquele código. Use códigos pouco óbvios durante as aulas.
+### Jogo
+- W, A, S, D: andar;
+- Shift: correr;
+- mouse: olhar;
+- E ou clique: interagir;
+- 1: acenar;
+- 2: apontar.
