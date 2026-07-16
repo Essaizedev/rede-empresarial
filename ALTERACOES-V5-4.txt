@@ -1,0 +1,15 @@
+VERSÃO 5.4 — REDIMENSIONAMENTO, GUIAS, VIDRAÇARIA E AVATARES
+
+- Nova ferramenta Redimensionar com eixos para puxar comprimento, altura e profundidade.
+- Portas, janelas e portões limitam automaticamente a largura ao espaço livre da parede.
+- Guias magnéticas mostram alinhamento exato entre bordas, centros e pontas distantes.
+- Ao desenhar paredes, uma linha aparece quando a nova ponta fica alinhada com outro canto.
+- Nova ferramenta Vidraçaria para desenhar paredes contínuas feitas somente de vidro.
+- Altura, espessura e cor do vidro podem ser configuradas.
+- Corrigida a direção dos avatares: quem está à frente agora vê o rosto, não as costas.
+- Corrigidos os gestos de acenar e apontar para os braços não atravessarem o corpo.
+- Corrigida a visualização dos gestos em primeira pessoa.
+
+ATUALIZAÇÃO RÁPIDA
+Substitua src/main.js, src/objects.js, src/avatar.js e src/style.css.
+Não precisa alterar Supabase, SQL ou variáveis da Vercel.

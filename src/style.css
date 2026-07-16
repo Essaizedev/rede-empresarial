@@ -108,7 +108,7 @@ canvas.webgl { position: fixed; inset: 0; display: block; z-index: 0; }
 .left-sidebar.collapsed > :not(.sidebar-heading) { display: none; }
 .left-sidebar.collapsed .sidebar-heading > div { display: none; }
 .empty-state { padding: 18px 12px; border-radius: 12px; color: #bfc9c1; background: #222a25; text-align: center; line-height: 1.45; }
-.action-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.action-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
 .action-strip button { padding: 7px 4px; color: #fff; background: #526057; font-size: 11px; }
 .action-strip button.active { color: #282b22; background: var(--primary); }
 .validation-results { margin-top: 8px; color: #cbd5cd; font-size: 12px; line-height: 1.45; }

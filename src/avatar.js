@@ -497,13 +497,19 @@ export function updateAvatar(root, delta, elapsed) {
 
   const gestureActive = root.userData.gestureUntil > performance.now();
   if (gestureActive && root.userData.gesture === 'wave') {
-    rig.rightArm.rotation.z = -2.3;
-    rig.rightArm.rotation.x = Math.sin(elapsed * 12) * 0.45;
+    // O braço direito sobe para fora do tronco. O sinal positivo no eixo Z
+    // evita que o membro atravesse o peito do avatar.
+    rig.rightArm.rotation.z = 2.62;
+    rig.rightArm.rotation.x = 0.18 + Math.sin(elapsed * 12) * 0.34;
+    rig.rightArm.rotation.y = -0.12;
   } else if (gestureActive && root.userData.gesture === 'point') {
-    rig.rightArm.rotation.z = -1.55;
-    rig.rightArm.rotation.x = -1.25;
+    // O eixo frontal do avatar é -Z; +90° em X aponta o braço para a frente.
+    rig.rightArm.rotation.z = 0.12;
+    rig.rightArm.rotation.x = Math.PI * 0.5;
+    rig.rightArm.rotation.y = 0;
   } else {
     rig.leftArm.rotation.z = -0.08;
     rig.rightArm.rotation.z = 0.08;
+    rig.rightArm.rotation.y = 0;
   }
 }

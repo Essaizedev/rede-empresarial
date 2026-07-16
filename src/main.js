@@ -21,6 +21,7 @@ import {
   createCable,
   createObject,
   createObjectFromData,
+  createGlassWall,
   createRoad,
   createSidewalk,
   createWall,
@@ -32,6 +33,7 @@ import {
   getSegmentInfo,
   networkValidation,
   objectLabel,
+  rebuildGlassWall,
   rebuildSegment,
   rebuildWall,
   resizeObject,
@@ -199,6 +201,7 @@ app.innerHTML = `
           <button data-tool="select" class="active">Selecionar</button>
           <button data-tool="windowSelect">Seleção em área</button>
           <button data-tool="wall">Parede</button>
+          <button data-tool="glassWall">Vidraçaria</button>
           <button data-tool="paint">Pintar parede</button>
           <button data-add="door">Porta</button>
           <button data-add="window">Janela</button>
@@ -246,10 +249,16 @@ app.innerHTML = `
         <label class="check"><input id="orthogonalMode" type="checkbox" /> Modo ortogonal — somente 0° e 90° (F8)</label>
         <label class="check"><input id="showGrid" type="checkbox" checked /> Mostrar grade</label>
         <label class="check"><input id="showMeasurements" type="checkbox" checked /> Mostrar comprimento e ângulo</label>
+        <label class="check"><input id="showAlignmentGuides" type="checkbox" checked /> Guias magnéticas de alinhamento</label>
         <div class="field-row">
           <label>Altura da parede<input id="wallHeightDefault" type="number" value="3" min="1.8" max="8" step="0.05" /></label>
           <label>Espessura<input id="wallDepthDefault" type="number" value="0.16" min="0.08" max="0.6" step="0.01" /></label>
         </div>
+        <div class="field-row">
+          <label>Altura do vidro<input id="glassHeightDefault" type="number" value="3" min="0.5" max="8" step="0.05" /></label>
+          <label>Espessura do vidro<input id="glassDepthDefault" type="number" value="0.035" min="0.018" max="0.12" step="0.005" /></label>
+        </div>
+        <div class="field"><label>Cor do vidro<input id="glassColorDefault" type="color" value="#8fd7ef" /></label></div>
         <div class="field"><label>Cor das novas paredes<input id="wallColorDefault" type="color" value="#cfc6a2" /></label></div>
         <div class="color-swatches" aria-label="Cores rápidas para paredes">
           <button type="button" data-wall-color="#f2efe2" style="--swatch:#f2efe2" title="Branco quente"></button>
@@ -315,6 +324,7 @@ app.innerHTML = `
         <div class="action-strip">
           <button data-transform="translate" class="active">Mover</button>
           <button data-transform="rotate">Girar</button>
+          <button data-transform="scale">Redimensionar</button>
           <button id="duplicateObject">Duplicar</button>
           <button id="deleteObject" class="delete">Apagar</button>
         </div>
@@ -571,6 +581,165 @@ snapMarker.renderOrder = 45;
 snapMarker.visible = false;
 helperLayer.add(snapMarker);
 
+const alignmentGuideX = new THREE.Line(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({ color: 0xff4fa3, transparent: true, opacity: 0.95, depthTest: false }),
+);
+const alignmentGuideZ = new THREE.Line(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({ color: 0x43e0ff, transparent: true, opacity: 0.95, depthTest: false }),
+);
+for (const guide of [alignmentGuideX, alignmentGuideZ]) {
+  guide.visible = false;
+  guide.renderOrder = 46;
+  helperLayer.add(guide);
+}
+
+function setGuideLine(line, points) {
+  line.geometry.dispose();
+  line.geometry = new THREE.BufferGeometry().setFromPoints(points);
+  line.visible = true;
+}
+
+function clearAlignmentGuides() {
+  alignmentGuideX.visible = false;
+  alignmentGuideZ.visible = false;
+}
+
+function guideCoordinates(root) {
+  if (!root || root.userData.kind === 'cable' || root.userData.kind === 'spawnPoint') return null;
+  root.updateMatrixWorld(true);
+  if (root.userData.segment) {
+    const start = root.localToWorld(new THREE.Vector3(-getSegmentInfo(root).length / 2, 0, 0));
+    const end = root.localToWorld(new THREE.Vector3(getSegmentInfo(root).length / 2, 0, 0));
+    return {
+      x: [start.x, (start.x + end.x) / 2, end.x],
+      z: [start.z, (start.z + end.z) / 2, end.z],
+      minX: Math.min(start.x, end.x),
+      maxX: Math.max(start.x, end.x),
+      minZ: Math.min(start.z, end.z),
+      maxZ: Math.max(start.z, end.z),
+    };
+  }
+  const box = new THREE.Box3().setFromObject(root);
+  if (box.isEmpty()) return null;
+  const center = box.getCenter(new THREE.Vector3());
+  return {
+    x: [box.min.x, center.x, box.max.x],
+    z: [box.min.z, center.z, box.max.z],
+    minX: box.min.x,
+    maxX: box.max.x,
+    minZ: box.min.z,
+    maxZ: box.max.z,
+  };
+}
+
+function alignmentTargets(excludedRoot) {
+  const x = [];
+  const z = [];
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const root of world.children) {
+    if (root === excludedRoot || selectedRoots.has(root)) continue;
+    const values = guideCoordinates(root);
+    if (!values) continue;
+    x.push(...values.x);
+    z.push(...values.z);
+    minX = Math.min(minX, values.minX);
+    maxX = Math.max(maxX, values.maxX);
+    minZ = Math.min(minZ, values.minZ);
+    maxZ = Math.max(maxZ, values.maxZ);
+  }
+  return { x, z, minX, maxX, minZ, maxZ };
+}
+
+function closestGuideDelta(values, targets, tolerance) {
+  let best = null;
+  for (const value of values) {
+    for (const target of targets) {
+      const delta = target - value;
+      if (Math.abs(delta) <= tolerance && (!best || Math.abs(delta) < Math.abs(best.delta))) {
+        best = { value, target, delta };
+      }
+    }
+  }
+  return best;
+}
+
+function translateRootBy(root, dx, dz) {
+  if (!root || (!dx && !dz)) return;
+  if (root.userData.segment) {
+    root.userData.segment.start[0] += dx;
+    root.userData.segment.start[1] += dz;
+    root.userData.segment.end[0] += dx;
+    root.userData.segment.end[1] += dz;
+    if (root.userData.kind === 'wall') rebuildWall(root, world);
+    else if (root.userData.kind === 'glassWall') rebuildGlassWall(root);
+    else rebuildSegment(root);
+  } else {
+    root.position.x += dx;
+    root.position.z += dz;
+  }
+}
+
+function updateAlignmentGuides(root, { allowTranslateSnap = false } = {}) {
+  clearAlignmentGuides();
+  if (!settings.showAlignmentGuides || !settings.smartSnap || !root || selectedRoots.size !== 1) return;
+  const current = guideCoordinates(root);
+  if (!current) return;
+  const targets = alignmentTargets(root);
+  const tolerance = Math.max(0.035, Math.min(0.14, settings.grid * 0.42));
+  const matchX = closestGuideDelta(current.x, targets.x, tolerance);
+  const matchZ = closestGuideDelta(current.z, targets.z, tolerance);
+
+  if (allowTranslateSnap && !alignmentAdjusting && transform.getMode() === 'translate') {
+    const dx = matchX?.delta || 0;
+    const dz = matchZ?.delta || 0;
+    if (Math.abs(dx) > 1e-5 || Math.abs(dz) > 1e-5) {
+      alignmentAdjusting = true;
+      root.position.x += dx;
+      root.position.z += dz;
+      root.updateMatrixWorld(true);
+      alignmentAdjusting = false;
+    }
+  }
+
+  const updated = guideCoordinates(root) || current;
+  const spanMinX = Math.min(updated.minX, Number.isFinite(targets.minX) ? targets.minX : updated.minX) - 2;
+  const spanMaxX = Math.max(updated.maxX, Number.isFinite(targets.maxX) ? targets.maxX : updated.maxX) + 2;
+  const spanMinZ = Math.min(updated.minZ, Number.isFinite(targets.minZ) ? targets.minZ : updated.minZ) - 2;
+  const spanMaxZ = Math.max(updated.maxZ, Number.isFinite(targets.maxZ) ? targets.maxZ : updated.maxZ) + 2;
+
+  if (matchX) setGuideLine(alignmentGuideX, [
+    new THREE.Vector3(matchX.target, 0.08, spanMinZ),
+    new THREE.Vector3(matchX.target, 0.08, spanMaxZ),
+  ]);
+  if (matchZ) setGuideLine(alignmentGuideZ, [
+    new THREE.Vector3(spanMinX, 0.08, matchZ.target),
+    new THREE.Vector3(spanMaxX, 0.08, matchZ.target),
+  ]);
+
+  if ((matchX || matchZ) && appMode === 'builder') {
+    const labels = [matchX ? 'eixo X justo' : '', matchZ ? 'eixo Z justo' : ''].filter(Boolean);
+    setBuilderStatus(`Guia magnética: ${labels.join(' e ')}.`);
+  }
+}
+
+function snapRootToGuides(root) {
+  if (!settings.showAlignmentGuides || !settings.smartSnap || !root || OPENING_KINDS.has(root.userData.kind)) return;
+  root.updateMatrixWorld(true);
+  const current = guideCoordinates(root);
+  const targets = alignmentTargets(root);
+  if (!current) return;
+  const tolerance = Math.max(0.035, Math.min(0.14, settings.grid * 0.42));
+  const matchX = closestGuideDelta(current.x, targets.x, tolerance);
+  const matchZ = closestGuideDelta(current.z, targets.z, tolerance);
+  translateRootBy(root, matchX?.delta || 0, matchZ?.delta || 0);
+  updateAlignmentGuides(root);
+}
+
 function createFirstPersonBody() {
   const group = new THREE.Group();
   group.name = 'first-person-body';
@@ -620,7 +789,7 @@ function updateFirstPersonBody(delta, moving) {
   const bob = moving && !activeVehicle ? Math.sin(elapsed * 10) * 0.018 : 0;
   firstPersonBody.position.y = bob;
   rig.leftArm.rotation.set(0, 0, moving && !activeVehicle ? Math.sin(elapsed * 10) * 0.06 : 0.04);
-  rig.rightArm.rotation.set(0, 0, moving && !activeVehicle ? -Math.sin(elapsed * 10) * 0.06 : -0.04);
+  rig.rightArm.rotation.set(0, 0, moving && !activeVehicle ? -Math.sin(elapsed * 10) * 0.06 : 0.04);
   if (activeVehicle) {
     rig.torso.visible = false;
     rig.leftArm.position.set(-0.25, -0.32, -0.76);
@@ -636,13 +805,15 @@ function updateFirstPersonBody(delta, moving) {
   }
   if (firstPersonGestureUntil > performance.now()) {
     if (firstPersonGesture === 'wave') {
-      rig.rightArm.position.set(0.33, -0.10, -0.65);
-      rig.rightArm.rotation.x = -1.45 + Math.sin(elapsed * 13) * 0.34;
-      rig.rightArm.rotation.z = -0.75;
+      rig.rightArm.position.set(0.42, -0.08, -0.72);
+      rig.rightArm.rotation.x = 0.18 + Math.sin(elapsed * 13) * 0.28;
+      rig.rightArm.rotation.y = 0;
+      rig.rightArm.rotation.z = 2.28;
     } else if (firstPersonGesture === 'point') {
-      rig.rightArm.position.set(0.22, -0.18, -0.72);
-      rig.rightArm.rotation.x = -1.58;
-      rig.rightArm.rotation.z = -0.18;
+      rig.rightArm.position.set(0.34, -0.28, -0.66);
+      rig.rightArm.rotation.x = 1.42;
+      rig.rightArm.rotation.y = 0;
+      rig.rightArm.rotation.z = 0.10;
     }
   }
 }
@@ -659,6 +830,7 @@ const selectedRoots = new Set();
 const selectionHelpers = new Map();
 let selectionDrag = null;
 let transformStartState = null;
+let alignmentAdjusting = false;
 let realtimeChannel = null;
 let currentRoom = '';
 let localPlayer = null;
@@ -696,9 +868,13 @@ const settings = {
   smartSnap: $('#smartSnap').checked,
   orthogonal: $('#orthogonalMode').checked,
   showMeasurements: $('#showMeasurements').checked,
+  showAlignmentGuides: $('#showAlignmentGuides').checked,
   wallHeight: Number($('#wallHeightDefault').value),
   wallDepth: Number($('#wallDepthDefault').value),
   wallColor: $('#wallColorDefault').value,
+  glassHeight: Number($('#glassHeightDefault').value),
+  glassDepth: Number($('#glassDepthDefault').value),
+  glassColor: $('#glassColorDefault').value,
   roadWidth: Number($('#roadWidthDefault').value),
   doorWidth: Number($('#doorWidthDefault').value),
   doorHeight: Number($('#doorHeightDefault').value),
@@ -895,6 +1071,7 @@ function addRoot(root, label = 'Objeto adicionado') {
   world.add(root);
   applyShadowFlagsToRoot(root);
   if (root.userData.kind === 'wall') rebuildWall(root, world);
+  else if (root.userData.kind === 'glassWall') rebuildGlassWall(root);
   if (root.userData.kind === 'cable') updateAllCables(world);
   selectOnly(root);
   commitHistory(label);
@@ -955,8 +1132,13 @@ function clearSelection() {
 
 function attachTransform() {
   transform.detach();
+  clearAlignmentGuides();
   if (selected && selectedRoots.size === 1 && !selected.userData.locked && selected.userData.kind !== 'cable') {
     transform.camera = activeBuilderCamera;
+    transform.showX = true;
+    transform.showY = !['road', 'sidewalk'].includes(selected.userData.kind);
+    transform.showZ = true;
+    transform.setSpace(transform.getMode() === 'scale' ? 'local' : 'world');
     transform.attach(selected);
   }
 }
@@ -1097,6 +1279,10 @@ function applyProperties() {
       root.userData.segment.height = Math.max(0.2, dimensions.height);
       root.userData.segment.thickness = Math.max(0.05, dimensions.depth);
       rebuildWall(root, world);
+    } else if (kind === 'glassWall') {
+      root.userData.segment.height = Math.max(0.2, dimensions.height);
+      root.userData.segment.thickness = Math.max(0.018, dimensions.depth);
+      rebuildGlassWall(root);
     } else {
       root.userData.segment.width = Math.max(0.2, dimensions.depth);
       rebuildSegment(root);
@@ -1107,6 +1293,7 @@ function applyProperties() {
     root.rotation.y = desiredRotation;
     if (kind === 'window') root.userData.sillHeight = Math.max(0, Number($('#propSill').value) || 0);
     if (kind === 'slidingGate') root.userData.slideDirection = Number($('#propSlideDirection').value) === -1 ? -1 : 1;
+    if (!root.userData.dimensions) root.userData.dimensions = { ...getObjectDimensions(root) };
     resizeObject(root, dimensions, world);
     if (OPENING_KINDS.has(kind)) {
       const result = snapOpeningToWall(root, world, root.position, { maxDistance: 3, grid: settings.grid });
@@ -1163,6 +1350,7 @@ function moveSelectedBy(dx, dz) {
       root.userData.segment.end[0] += dx;
       root.userData.segment.end[1] += dz;
       if (root.userData.kind === 'wall') rebuildWall(root, world);
+      else if (root.userData.kind === 'glassWall') rebuildGlassWall(root);
       else rebuildSegment(root);
     } else {
       root.position.x += dx;
@@ -1301,7 +1489,11 @@ function snapGrid(value) {
 }
 
 function endpointCandidates(kind) {
-  const allowed = kind === 'road' ? new Set(['road', 'sidewalk']) : kind === 'sidewalk' ? new Set(['sidewalk', 'road']) : new Set(['wall']);
+  const allowed = kind === 'road'
+    ? new Set(['road', 'sidewalk'])
+    : kind === 'sidewalk'
+      ? new Set(['sidewalk', 'road'])
+      : new Set(['wall', 'glassWall']);
   const result = [];
   for (const root of world.children.filter((item) => allowed.has(item.userData.kind) && item.userData.segment)) {
     result.push(new THREE.Vector3(root.userData.segment.start[0], 0, root.userData.segment.start[1]));
@@ -1314,6 +1506,8 @@ function smartSnapPoint(raw, start = null, kind = 'wall') {
   const point = raw.clone();
   point.y = 0;
   let reason = '';
+  let guideX = null;
+  let guideZ = null;
   point.x = snapGrid(point.x);
   point.z = snapGrid(point.z);
   const threshold = Math.max(0.34, settings.grid * 1.55);
@@ -1325,7 +1519,7 @@ function smartSnapPoint(raw, start = null, kind = 'wall') {
       else point.x = start.x;
       reason = 'modo ortogonal';
     }
-    return { point, reason: reason || 'grade' };
+    return { point, reason: reason || 'grade', guideX, guideZ };
   }
 
   let nearestEndpoint = null;
@@ -1340,7 +1534,7 @@ function smartSnapPoint(raw, start = null, kind = 'wall') {
   if (nearestEndpoint) {
     point.copy(nearestEndpoint);
     reason = 'encaixado ao canto existente';
-  } else if (kind === 'wall') {
+  } else if (kind === 'wall' || kind === 'glassWall') {
     const nearestWall = findNearestWall(point, world, threshold);
     if (nearestWall) {
       point.copy(nearestWall.point);
@@ -1350,7 +1544,30 @@ function smartSnapPoint(raw, start = null, kind = 'wall') {
     }
   }
 
-  if (start && point.distanceTo(start) > 0.01 && !nearestEndpoint && reason !== 'encaixado à parede existente') {
+  // Mesmo que a outra ponta esteja longe, o construtor detecta quando o cursor
+  // cruza exatamente o mesmo X ou Z de um canto existente e mostra uma guia.
+  if (start && !nearestEndpoint && !reason.includes('parede existente')) {
+    let bestX = null;
+    let bestZ = null;
+    for (const endpoint of endpointCandidates(kind)) {
+      if (endpoint.distanceTo(start) < 0.01) continue;
+      const dx = Math.abs(endpoint.x - point.x);
+      const dz = Math.abs(endpoint.z - point.z);
+      if (dx <= threshold && (!bestX || dx < bestX.distance)) bestX = { endpoint, distance: dx };
+      if (dz <= threshold && (!bestZ || dz < bestZ.distance)) bestZ = { endpoint, distance: dz };
+    }
+    if (bestX && (!bestZ || bestX.distance <= bestZ.distance)) {
+      point.x = bestX.endpoint.x;
+      guideX = bestX.endpoint.clone();
+      reason = 'alinhado a outra ponta no eixo X';
+    } else if (bestZ) {
+      point.z = bestZ.endpoint.z;
+      guideZ = bestZ.endpoint.clone();
+      reason = 'alinhado a outra ponta no eixo Z';
+    }
+  }
+
+  if (start && point.distanceTo(start) > 0.01 && !nearestEndpoint && reason !== 'encaixado à parede existente' && !reason.includes('outra ponta')) {
     const dx = point.x - start.x;
     const dz = point.z - start.z;
     if (settings.orthogonal) {
@@ -1377,7 +1594,7 @@ function smartSnapPoint(raw, start = null, kind = 'wall') {
     }
   }
 
-  return { point, reason: reason || 'encaixado na grade' };
+  return { point, reason: reason || 'encaixado na grade', guideX, guideZ };
 }
 
 function clearPreview() {
@@ -1389,6 +1606,7 @@ function clearPreview() {
   previewObject = null;
   measurementBadge.classList.add('hidden');
   snapMarker.visible = false;
+  clearAlignmentGuides();
 }
 
 function showSnapMarker(point, reason = '') {
@@ -1401,17 +1619,45 @@ function showSnapMarker(point, reason = '') {
   snapMarker.visible = true;
 }
 
+function showDrawingAlignmentGuides(snapped, start) {
+  clearAlignmentGuides();
+  if (!settings.showAlignmentGuides || !start || !snapped) return;
+  if (snapped.guideX) {
+    const minZ = Math.min(start.z, snapped.guideX.z, snapped.point.z) - 1;
+    const maxZ = Math.max(start.z, snapped.guideX.z, snapped.point.z) + 1;
+    setGuideLine(alignmentGuideX, [
+      new THREE.Vector3(snapped.point.x, 0.08, minZ),
+      new THREE.Vector3(snapped.point.x, 0.08, maxZ),
+    ]);
+  }
+  if (snapped.guideZ) {
+    const minX = Math.min(start.x, snapped.guideZ.x, snapped.point.x) - 1;
+    const maxX = Math.max(start.x, snapped.guideZ.x, snapped.point.x) + 1;
+    setGuideLine(alignmentGuideZ, [
+      new THREE.Vector3(minX, 0.08, snapped.point.z),
+      new THREE.Vector3(maxX, 0.08, snapped.point.z),
+    ]);
+  }
+}
+
 function showSegmentPreview(start, end, kind, reason = '') {
   clearPreview();
   const dx = end.x - start.x;
   const dz = end.z - start.z;
   const length = Math.hypot(dx, dz);
   if (length < 0.02) return;
-  const width = kind === 'wall' ? settings.wallDepth : kind === 'road' ? settings.roadWidth : 1.5;
-  const height = kind === 'wall' ? settings.wallHeight : 0.05;
-  const material = new THREE.MeshBasicMaterial({ color: kind === 'wall' ? settings.wallColor : 0xffdd63, transparent: true, opacity: 0.5, depthTest: false });
+  const width = kind === 'wall'
+    ? settings.wallDepth
+    : kind === 'glassWall'
+      ? settings.glassDepth
+      : kind === 'road'
+        ? settings.roadWidth
+        : 1.5;
+  const height = kind === 'wall' ? settings.wallHeight : kind === 'glassWall' ? settings.glassHeight : 0.05;
+  const color = kind === 'wall' ? settings.wallColor : kind === 'glassWall' ? settings.glassColor : 0xffdd63;
+  const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: kind === 'glassWall' ? 0.28 : 0.5, depthTest: false });
   previewObject = new THREE.Mesh(new THREE.BoxGeometry(length, height, width), material);
-  previewObject.position.set((start.x + end.x) / 2, kind === 'wall' ? height / 2 : 0.06, (start.z + end.z) / 2);
+  previewObject.position.set((start.x + end.x) / 2, ['wall', 'glassWall'].includes(kind) ? height / 2 : 0.06, (start.z + end.z) / 2);
   previewObject.rotation.y = -Math.atan2(dz, dx);
   previewObject.renderOrder = 40;
   previewLayer.add(previewObject);
@@ -1442,7 +1688,7 @@ function setTool(tool) {
   if (tool === 'select') setBuilderStatus('Clique para selecionar. Arraste para mover a câmera. Shift + arraste cria uma seleção em área.');
   else if (tool === 'windowSelect') setBuilderStatus('Arraste um retângulo: esquerda→direita seleciona dentro; direita→esquerda também seleciona o que tocar.');
   else if (tool === 'paint') setBuilderStatus('Clique em uma parede para aplicar a cor escolhida. Se várias paredes estiverem selecionadas, todas serão pintadas.');
-  else if (['wall', 'road', 'sidewalk'].includes(tool)) setBuilderStatus(`Clique no início e no final: ${objectLabel(tool)}. Use o botão direito para mover a câmera.`);
+  else if (['wall', 'glassWall', 'road', 'sidewalk'].includes(tool)) setBuilderStatus(`Clique no início e no final: ${objectLabel(tool)}. Use o botão direito para mover a câmera.`);
   else if (tool === 'cable') setBuilderStatus('Clique no primeiro e depois no segundo equipamento de rede.');
 }
 
@@ -1477,11 +1723,13 @@ function createSegmentTool(kind, start, end) {
   }
   let root;
   if (kind === 'wall') root = createWall(start, end, { height: settings.wallHeight, thickness: settings.wallDepth, color: settings.wallColor, world });
+  else if (kind === 'glassWall') root = createGlassWall(start, end, { height: settings.glassHeight, thickness: settings.glassDepth, color: settings.glassColor });
   else if (kind === 'road') root = createRoad(start, end, { width: settings.roadWidth });
   else root = createSidewalk(start, end, { width: 1.5 });
   world.add(root);
   applyShadowFlagsToRoot(root);
   if (kind === 'wall') rebuildWall(root, world);
+  else if (kind === 'glassWall') rebuildGlassWall(root);
   clearSelection();
   commitHistory(`${objectLabel(kind)} criada`);
   refreshValidation();
@@ -1564,7 +1812,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     return;
   }
 
-  if (['wall', 'road', 'sidewalk'].includes(currentTool)) {
+  if (['wall', 'glassWall', 'road', 'sidewalk'].includes(currentTool)) {
     const raw = groundPoint(event);
     if (!raw) return;
     const snapped = smartSnapPoint(raw, segmentStart, currentTool);
@@ -1575,10 +1823,10 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     } else {
       const created = createSegmentTool(currentTool, segmentStart, snapped.point);
       clearPreview();
-      if (created && currentTool === 'wall') {
+      if (created && ['wall', 'glassWall'].includes(currentTool)) {
         segmentStart = snapped.point.clone();
         clearSelection();
-        setBuilderStatus('Parede criada. Continue clicando para desenhar paredes conectadas. Pressione Esc para finalizar.');
+        setBuilderStatus(`${objectLabel(currentTool)} criada. Continue clicando para desenhar trechos conectados. Pressione Esc para finalizar.`);
       } else {
         segmentStart = null;
         setBuilderStatus(`${objectLabel(currentTool)} criada. Clique para iniciar outra.`);
@@ -1625,12 +1873,13 @@ renderer.domElement.addEventListener('pointermove', (event) => {
     const distance = Math.hypot(event.clientX - canvasPointerStart.x, event.clientY - canvasPointerStart.y);
     if (distance > 5) canvasPointerMoved = true;
   }
-  if (appMode !== 'builder' || !segmentStart || !['wall', 'road', 'sidewalk'].includes(currentTool)) return;
+  if (appMode !== 'builder' || !segmentStart || !['wall', 'glassWall', 'road', 'sidewalk'].includes(currentTool)) return;
   const raw = groundPoint(event);
   if (!raw) return;
   const snapped = smartSnapPoint(raw, segmentStart, currentTool);
   showSegmentPreview(segmentStart, snapped.point, currentTool, snapped.reason);
   showSnapMarker(snapped.point, snapped.reason);
+  showDrawingAlignmentGuides(snapped, segmentStart);
 }, { capture: true });
 
 renderer.domElement.addEventListener('pointerup', (event) => {
@@ -1669,19 +1918,55 @@ transform.addEventListener('mouseDown', () => {
     position: selected.position.clone(),
     rotation: selected.rotation.clone(),
     hostWallId: selected.userData.hostWallId || '',
+    dimensions: { ...getObjectDimensions(selected) },
+    scale: selected.scale.clone(),
+    mode: transform.getMode(),
   };
 });
 
 transform.addEventListener('objectChange', () => {
+  if (selected && transformStartState?.mode === 'scale') {
+    const factors = new THREE.Vector3(
+      Math.abs(selected.scale.x / Math.max(0.0001, transformStartState.scale.x)),
+      Math.abs(selected.scale.y / Math.max(0.0001, transformStartState.scale.y)),
+      Math.abs(selected.scale.z / Math.max(0.0001, transformStartState.scale.z)),
+    );
+    $('#propWidth').value = round(transformStartState.dimensions.width * factors.x);
+    $('#propHeight').value = round(transformStartState.dimensions.height * factors.y);
+    $('#propDepth').value = round(transformStartState.dimensions.depth * factors.z);
+  } else {
+    syncPropertiesForm();
+  }
+  updateAlignmentGuides(selected, { allowTranslateSnap: true });
   refreshSelectionHelpers();
-  syncPropertiesForm();
   updateAllCables(world);
 });
 
 transform.addEventListener('mouseUp', () => {
   if (!selected || !transformStartState) return;
-  if (SEGMENT_KINDS.has(selected.userData.kind)) {
+  const mode = transformStartState.mode;
+
+  if (mode === 'scale') {
+    const factors = new THREE.Vector3(
+      Math.abs(selected.scale.x / Math.max(0.0001, transformStartState.scale.x)),
+      Math.abs(selected.scale.y / Math.max(0.0001, transformStartState.scale.y)),
+      Math.abs(selected.scale.z / Math.max(0.0001, transformStartState.scale.z)),
+    );
+    const nextDimensions = {
+      width: Math.max(0.05, transformStartState.dimensions.width * factors.x),
+      height: Math.max(0.02, transformStartState.dimensions.height * factors.y),
+      depth: Math.max(0.018, transformStartState.dimensions.depth * factors.z),
+    };
+    selected.scale.copy(transformStartState.scale);
+    if (!selected.userData.dimensions && !SEGMENT_KINDS.has(selected.userData.kind)) {
+      selected.userData.dimensions = { ...transformStartState.dimensions };
+    }
+    const resized = resizeObject(selected, nextDimensions, world);
+    snapRootToGuides(selected);
+    if (resized?.adjusted) setBuilderStatus('O tamanho foi ajustado automaticamente ao espaço livre da parede.');
+  } else if (SEGMENT_KINDS.has(selected.userData.kind)) {
     applySegmentTransform(selected, transformStartState.segment, world);
+    snapRootToGuides(selected);
   } else if (OPENING_KINDS.has(selected.userData.kind)) {
     const result = snapOpeningToWall(selected, world, selected.position, { maxDistance: 2.6, grid: settings.grid });
     if (!result.ok) {
@@ -1695,12 +1980,14 @@ transform.addEventListener('mouseUp', () => {
   } else {
     selected.position.x = snapGrid(selected.position.x);
     selected.position.z = snapGrid(selected.position.z);
+    snapRootToGuides(selected);
   }
   transformStartState = null;
+  clearAlignmentGuides();
   updateAllCables(world);
   refreshSelectionHelpers();
   syncPropertiesForm();
-  commitHistory('Objeto transformado');
+  commitHistory(mode === 'scale' ? 'Objeto redimensionado' : 'Objeto transformado');
 });
 
 function setBuilderView(view) {
@@ -2336,7 +2623,7 @@ function rebuildGameCaches() {
   const staticKinds = new Set(['table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer']);
   for (const root of world.children) {
     const kind = root.userData.kind;
-    if (kind === 'wall') {
+    if (kind === 'wall' || kind === 'glassWall') {
       for (const piece of root.userData.collisionPieces || []) {
         const center = new THREE.Vector3().fromArray(piece.center);
         const size = new THREE.Vector3().fromArray(piece.size);
@@ -2444,7 +2731,7 @@ function initAvatarPreview() {
 
   function renderPreview(time) {
     if (appMode === 'home' && !document.hidden) {
-      previewAvatar.rotation.y = Math.sin(time * 0.00045) * 0.35;
+      previewAvatar.rotation.y = Math.PI + Math.sin(time * 0.00045) * 0.35;
       updateAvatar(previewAvatar, 0.016, time * 0.001);
       previewRenderer.render(previewScene, previewCamera);
     }
@@ -2573,8 +2860,16 @@ $$('[data-add]').forEach((button) => button.addEventListener('click', () => {
 }));
 
 $$('[data-transform]').forEach((button) => button.addEventListener('click', () => {
-  transform.setMode(button.dataset.transform);
+  const mode = button.dataset.transform;
+  transform.setMode(mode);
+  transform.setSpace(mode === 'scale' ? 'local' : 'world');
+  attachTransform();
   $$('[data-transform]').forEach((item) => item.classList.toggle('active', item === button));
+  setBuilderStatus(mode === 'scale'
+    ? 'Puxe os eixos coloridos para alterar comprimento, altura ou profundidade. As guias ficam magnéticas perto de outro limite.'
+    : mode === 'rotate'
+      ? 'Arraste o arco de rotação.'
+      : 'Arraste os eixos para mover. As guias magnéticas indicam alinhamento exato.');
 }));
 
 $('#gridSize').addEventListener('change', (event) => {
@@ -2588,8 +2883,15 @@ $('#showMeasurements').addEventListener('change', (event) => {
   settings.showMeasurements = event.target.checked;
   if (!settings.showMeasurements) measurementBadge.classList.add('hidden');
 });
+$('#showAlignmentGuides').addEventListener('change', (event) => {
+  settings.showAlignmentGuides = event.target.checked;
+  if (!settings.showAlignmentGuides) clearAlignmentGuides();
+});
 $('#wallHeightDefault').addEventListener('change', (event) => { settings.wallHeight = Math.max(1.8, Number(event.target.value) || 3); });
 $('#wallDepthDefault').addEventListener('change', (event) => { settings.wallDepth = Math.max(0.08, Number(event.target.value) || 0.16); });
+$('#glassHeightDefault').addEventListener('change', (event) => { settings.glassHeight = Math.max(0.5, Number(event.target.value) || 3); });
+$('#glassDepthDefault').addEventListener('change', (event) => { settings.glassDepth = Math.max(0.018, Number(event.target.value) || 0.035); });
+$('#glassColorDefault').addEventListener('input', (event) => { settings.glassColor = event.target.value; });
 $('#wallColorDefault').addEventListener('input', (event) => { settings.wallColor = event.target.value; });
 $('#roadWidthDefault').addEventListener('change', (event) => { settings.roadWidth = Math.max(2, Number(event.target.value) || 6); });
 $('#doorWidthDefault').addEventListener('change', (event) => { settings.doorWidth = Math.max(0.55, Number(event.target.value) || 0.9); });
@@ -2759,12 +3061,15 @@ function animate() {
       // frequência conforme a quantidade de pessoas e prevemos o movimento entre
       // pacotes para manter a animação fluida sem derrubar o canal.
       const correctionInterval = THREE.MathUtils.clamp((playerCount * playerCount / 70) * 1000, 70, 2200);
-      const movementSignature = `${forward}:${side}:${keys.has('ShiftLeft') || keys.has('ShiftRight')}:${activeVehicle?.userData.objectId || ''}:${Math.sign(activeVehicle?.userData.speed || 0)}`;
+      const viewYaw = activeVehicle ? activeVehicle.rotation.y : Math.atan2(-look.x, -look.z);
+      const yawBucket = Math.round(viewYaw / THREE.MathUtils.degToRad(6));
+      const movementSignature = `${forward}:${side}:${keys.has('ShiftLeft') || keys.has('ShiftRight')}:${activeVehicle?.userData.objectId || ''}:${Math.sign(activeVehicle?.userData.speed || 0)}:${yawBucket}`;
       const stateChanged = movementSignature !== lastMovementSignature;
       const idleInterval = 2400;
       const sendInterval = moving ? correctionInterval : idleInterval;
+      const immediateStateUpdate = stateChanged && now - lastMoveSent > 90;
 
-      if (stateChanged || now - lastMoveSent > sendInterval) {
+      if (immediateStateUpdate || now - lastMoveSent > sendInterval) {
         const velocity = new THREE.Vector3();
         if (activeVehicle) {
           velocity.set(0, 0, -1).applyQuaternion(activeVehicle.quaternion).multiplyScalar(Number(activeVehicle.userData.speed) || 0);
@@ -2779,7 +3084,7 @@ function animate() {
           ...localPlayer,
           x: activeVehicle ? activeVehicle.position.x : gameCamera.position.x,
           z: activeVehicle ? activeVehicle.position.z : gameCamera.position.z,
-          ry: activeVehicle ? activeVehicle.rotation.y : Math.atan2(look.x, look.z),
+          ry: activeVehicle ? activeVehicle.rotation.y : Math.atan2(-look.x, -look.z),
           moving,
           inVehicle: activeVehicle?.userData.objectId || '',
           vx: velocity.x,

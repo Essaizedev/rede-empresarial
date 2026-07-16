@@ -3,11 +3,12 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 export const OPENING_KINDS = new Set(['door', 'window', 'slidingGate']);
 export const NETWORK_KINDS = new Set(['computer', 'laptop', 'printer', 'network', 'switch', 'router', 'rack', 'server']);
-export const SEGMENT_KINDS = new Set(['wall', 'road', 'sidewalk']);
-export const COLLIDABLE_KINDS = new Set(['wall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer', 'car', 'motorcycle']);
+export const SEGMENT_KINDS = new Set(['wall', 'glassWall', 'road', 'sidewalk']);
+export const COLLIDABLE_KINDS = new Set(['wall', 'glassWall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer', 'car', 'motorcycle']);
 
 export const OBJECT_LABELS = {
   wall: 'Parede',
+  glassWall: 'Parede de vidro',
   door: 'Porta',
   window: 'Janela',
   slidingGate: 'Portão deslizante',
@@ -67,6 +68,7 @@ function makeMaterial(color, options = {}) {
     transparent: Boolean(options.transparent),
     opacity: options.opacity ?? 1,
     side: options.side ?? THREE.FrontSide,
+    depthWrite: options.depthWrite ?? true,
   });
 }
 
@@ -173,6 +175,66 @@ export function createWall(start, end, options = {}) {
   };
   rebuildWall(root, options.world || null);
   return root;
+}
+
+export function createGlassWall(start, end, options = {}) {
+  const root = setupRoot(new THREE.Group(), 'glassWall', { ...options, color: options.color || '#8fd7ef' });
+  root.userData.segment = {
+    start: [Number(start.x ?? start[0]) || 0, Number(start.z ?? start[1]) || 0],
+    end: [Number(end.x ?? end[0]) || 0, Number(end.z ?? end[1]) || 0],
+    height: Number(options.height) || 3,
+    thickness: Math.max(0.018, Number(options.thickness) || 0.035),
+  };
+  rebuildGlassWall(root);
+  return root;
+}
+
+export function rebuildGlassWall(root) {
+  if (!root?.userData?.segment) return;
+  clearChildren(root);
+  const info = getSegmentInfo(root);
+  const height = Math.max(0.2, Number(root.userData.segment.height) || 3);
+  const thickness = Math.max(0.018, Number(root.userData.segment.thickness) || 0.035);
+
+  root.position.set(info.center.x, 0, info.center.y);
+  root.rotation.set(0, info.angle, 0);
+  root.scale.set(1, 1, 1);
+  root.userData.collisionPieces = [{
+    center: [0, height / 2, 0],
+    size: [info.length, height, Math.max(thickness, 0.08)],
+  }];
+
+  const glass = makeMesh(
+    new THREE.BoxGeometry(info.length, height, thickness),
+    root.userData.color || '#8fd7ef',
+    {
+      transparent: true,
+      opacity: 0.28,
+      roughness: 0.04,
+      metalness: 0.03,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      castShadow: false,
+      receiveShadow: false,
+    },
+  );
+  glass.position.y = height / 2;
+  glass.name = 'glass-wall-pane';
+  root.add(glass);
+
+  // Uma linha muito fina no piso ajuda a enxergar o limite sem transformar
+  // a vidraçaria em uma parede com caixilho.
+  const base = makeMesh(
+    new THREE.BoxGeometry(info.length, 0.025, Math.max(thickness, 0.025)),
+    '#d7f3ff',
+    { roughness: 0.18, metalness: 0.05, castShadow: false, receiveShadow: false },
+  );
+  base.userData.keepColor = true;
+  base.position.y = 0.0125;
+  root.add(base);
+
+  root.userData.dimensions = { width: info.length, height, depth: thickness };
+  markRoot(root);
 }
 
 function wallPieceGeometry(root, geometries, x, width, y, height) {
@@ -899,6 +961,14 @@ export function updateAllCables(world) {
 }
 
 export function createObject(kind, position = new THREE.Vector3(), options = {}) {
+  if (kind === 'glassWall') {
+    const length = Number(options.width) || 2;
+    return createGlassWall(
+      [position.x - length / 2, position.z],
+      [position.x + length / 2, position.z],
+      options,
+    );
+  }
   if (kind === 'door') return createDoor(position, options);
   if (kind === 'window') return createWindow(position, options);
   if (kind === 'slidingGate') return createSlidingGate(position, options);
@@ -1042,22 +1112,59 @@ export function detachOpening(root, world) {
   if (oldWall) rebuildWall(oldWall, world);
 }
 
+function fitOpeningWidthToFreeInterval(root, wall, world, desiredWidth) {
+  const info = getSegmentInfo(wall);
+  if (!info) return { width: desiredWidth, offset: Number(root.userData.hostOffset) || desiredWidth / 2, adjusted: false };
+
+  const occupied = openingIntervals(wall, world, root.userData.objectId);
+  const freeIntervals = [];
+  let cursor = 0;
+  for (const interval of occupied) {
+    const min = Number(interval.min) || 0;
+    const max = Number(interval.max) || 0;
+    if (min > cursor + 0.01) freeIntervals.push([cursor, min]);
+    cursor = Math.max(cursor, max);
+  }
+  if (cursor < info.length - 0.01) freeIntervals.push([cursor, info.length]);
+  if (!freeIntervals.length) return { width: Math.min(desiredWidth, info.length), offset: info.length / 2, adjusted: true };
+
+  const currentOffset = THREE.MathUtils.clamp(Number(root.userData.hostOffset) || info.length / 2, 0, info.length);
+  let interval = freeIntervals.find(([min, max]) => currentOffset >= min && currentOffset <= max);
+  if (!interval) {
+    interval = freeIntervals.reduce((best, candidate) => {
+      const center = (candidate[0] + candidate[1]) / 2;
+      const distance = Math.abs(center - currentOffset);
+      return !best || distance < best.distance ? { candidate, distance } : best;
+    }, null)?.candidate || freeIntervals[0];
+  }
+
+  const available = Math.max(0.2, interval[1] - interval[0]);
+  const width = THREE.MathUtils.clamp(desiredWidth, 0.2, available);
+  const offset = THREE.MathUtils.clamp(currentOffset, interval[0] + width / 2, interval[1] - width / 2);
+  return {
+    width,
+    offset,
+    adjusted: Math.abs(width - desiredWidth) > 0.001 || Math.abs(offset - currentOffset) > 0.001,
+  };
+}
+
 export function resizeObject(root, dimensions, world = null) {
-  const width = Math.max(0.05, Number(dimensions.width) || root.userData.dimensions?.width || 1);
-  const height = Math.max(0.02, Number(dimensions.height) || root.userData.dimensions?.height || 1);
-  const depth = Math.max(0.02, Number(dimensions.depth) || root.userData.dimensions?.depth || 1);
+  let width = Math.max(0.05, Number(dimensions.width) || root.userData.dimensions?.width || 1);
+  let height = Math.max(0.02, Number(dimensions.height) || root.userData.dimensions?.height || 1);
+  let depth = Math.max(0.02, Number(dimensions.depth) || root.userData.dimensions?.depth || 1);
   const kind = root.userData.kind;
 
-  if (kind === 'wall') {
+  if (kind === 'wall' || kind === 'glassWall') {
     const info = getSegmentInfo(root);
     const center = info.center;
     const half = info.tangent.clone().multiplyScalar(width / 2);
     root.userData.segment.start = [center.x - half.x, center.y - half.y];
     root.userData.segment.end = [center.x + half.x, center.y + half.y];
     root.userData.segment.height = height;
-    root.userData.segment.thickness = depth;
-    rebuildWall(root, world);
-    return;
+    root.userData.segment.thickness = kind === 'glassWall' ? Math.max(0.018, depth) : depth;
+    if (kind === 'wall') rebuildWall(root, world);
+    else rebuildGlassWall(root);
+    return { width, height, depth: root.userData.segment.thickness };
   }
 
   if (kind === 'road' || kind === 'sidewalk') {
@@ -1072,6 +1179,29 @@ export function resizeObject(root, dimensions, world = null) {
   }
 
   const previous = { ...(root.userData.dimensions || { width: 1, height: 1, depth: 1 }) };
+  let openingAdjusted = false;
+  let hostWall = null;
+
+  if (OPENING_KINDS.has(kind) && world) {
+    hostWall = world.children.find((item) => item.userData.objectId === root.userData.hostWallId) || null;
+    if (!hostWall) hostWall = findNearestWall(root.position, world, 2.5)?.wall || null;
+    if (hostWall) {
+      const fitted = fitOpeningWidthToFreeInterval(root, hostWall, world, width);
+      width = fitted.width;
+      root.userData.hostWallId = hostWall.userData.objectId;
+      root.userData.hostOffset = fitted.offset;
+      openingAdjusted = fitted.adjusted;
+      const wallHeight = Math.max(0.2, Number(hostWall.userData.segment?.height) || 3);
+      depth = Math.max(0.05, Number(hostWall.userData.segment?.thickness) || 0.16);
+      if (kind === 'window') {
+        const sill = Math.max(0, Number(root.userData.sillHeight) || 0);
+        height = Math.max(0.15, Math.min(height, wallHeight - sill));
+      } else {
+        height = Math.max(0.2, Math.min(height, wallHeight));
+      }
+    }
+  }
+
   root.userData.dimensions = { width, height, depth };
   if (kind === 'door') createDoorVisual(root);
   else if (kind === 'window') createWindowVisual(root);
@@ -1083,12 +1213,18 @@ export function resizeObject(root, dimensions, world = null) {
   }
 
   if (OPENING_KINDS.has(kind) && world) {
-    const result = snapOpeningToWall(root, world, root.position, { maxDistance: 2.5 });
-    if (!result.ok && root.userData.hostWallId) {
-      const wall = world.children.find((item) => item.userData.objectId === root.userData.hostWallId);
-      if (wall) rebuildWall(wall, world);
+    if (hostWall) {
+      updateWallAttachments(hostWall, world);
+      rebuildWall(hostWall, world);
+    } else {
+      const result = snapOpeningToWall(root, world, root.position, { maxDistance: 2.5 });
+      if (!result.ok && root.userData.hostWallId) {
+        const wall = world.children.find((item) => item.userData.objectId === root.userData.hostWallId);
+        if (wall) rebuildWall(wall, world);
+      }
     }
   }
+  return { width, height, depth, adjusted: openingAdjusted };
 }
 
 export function applySegmentTransform(root, startState, world = null) {
@@ -1106,6 +1242,7 @@ export function applySegmentTransform(root, startState, world = null) {
   root.userData.segment.end = [newEnd.x, newEnd.y];
   root.scale.set(1, 1, 1);
   if (root.userData.kind === 'wall') rebuildWall(root, world);
+  else if (root.userData.kind === 'glassWall') rebuildGlassWall(root);
   else rebuildSegment(root);
 }
 
@@ -1185,14 +1322,16 @@ export function createObjectFromData(data, world = null) {
   };
   const dimensions = data.dimensions || {};
   let root = null;
-  if (data.kind === 'wall') {
+  if (data.kind === 'wall' || data.kind === 'glassWall') {
     const segment = data.segment || {
       start: [position.x - (data.dimensions?.width || 2) / 2, position.z],
       end: [position.x + (data.dimensions?.width || 2) / 2, position.z],
       height: data.dimensions?.height || 3,
-      thickness: data.dimensions?.depth || 0.16,
+      thickness: data.dimensions?.depth || (data.kind === 'glassWall' ? 0.035 : 0.16),
     };
-    root = createWall(segment.start, segment.end, { ...common, height: segment.height, thickness: segment.thickness, world: null });
+    root = data.kind === 'wall'
+      ? createWall(segment.start, segment.end, { ...common, height: segment.height, thickness: segment.thickness, world: null })
+      : createGlassWall(segment.start, segment.end, { ...common, height: segment.height, thickness: segment.thickness });
   } else if (data.kind === 'road' || data.kind === 'sidewalk') {
     const segment = data.segment || {
       start: [position.x - (data.dimensions?.width || 4) / 2, position.z],
@@ -1224,6 +1363,7 @@ export function createObjectFromData(data, world = null) {
 
 export function finalizeLoadedWorld(world) {
   for (const wall of world.children.filter((item) => item.userData.kind === 'wall')) rebuildWall(wall, world);
+  for (const glassWall of world.children.filter((item) => item.userData.kind === 'glassWall')) rebuildGlassWall(glassWall);
   for (const opening of world.children.filter((item) => OPENING_KINDS.has(item.userData.kind))) {
     const wall = world.children.find((item) => item.userData.objectId === opening.userData.hostWallId);
     if (wall) updateWallAttachments(wall, world);
