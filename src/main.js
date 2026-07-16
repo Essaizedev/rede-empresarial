@@ -167,7 +167,9 @@ app.innerHTML = `
       <div class="tool-section active" data-section="structure">
         <div class="tool-grid">
           <button data-tool="select" class="active">Selecionar</button>
+          <button data-tool="windowSelect">Seleção em área</button>
           <button data-tool="wall">Parede</button>
+          <button data-tool="paint">Pintar parede</button>
           <button data-add="door">Porta</button>
           <button data-add="window">Janela</button>
           <button data-add="slidingGate">Portão</button>
@@ -207,13 +209,50 @@ app.innerHTML = `
       <details open>
         <summary>Precisão e encaixe</summary>
         <div class="field"><label for="gridSize">Grade</label><select id="gridSize"><option value="0.1">10 cm</option><option value="0.25" selected>25 cm</option><option value="0.5">50 cm</option><option value="1">1 metro</option></select></div>
-        <label class="check"><input id="smartSnap" type="checkbox" checked /> Encaixe inteligente</label>
+        <label class="check"><input id="smartSnap" type="checkbox" checked /> Encaixe inteligente em cantos e paredes</label>
+        <label class="check"><input id="orthogonalMode" type="checkbox" /> Modo ortogonal — somente 0° e 90° (F8)</label>
         <label class="check"><input id="showGrid" type="checkbox" checked /> Mostrar grade</label>
+        <label class="check"><input id="showMeasurements" type="checkbox" checked /> Mostrar comprimento e ângulo</label>
         <div class="field-row">
           <label>Altura da parede<input id="wallHeightDefault" type="number" value="3" min="1.8" max="8" step="0.05" /></label>
           <label>Espessura<input id="wallDepthDefault" type="number" value="0.16" min="0.08" max="0.6" step="0.01" /></label>
         </div>
+        <div class="field"><label>Cor das novas paredes<input id="wallColorDefault" type="color" value="#cfc6a2" /></label></div>
+        <div class="color-swatches" aria-label="Cores rápidas para paredes">
+          <button type="button" data-wall-color="#f2efe2" style="--swatch:#f2efe2" title="Branco quente"></button>
+          <button type="button" data-wall-color="#cfc6a2" style="--swatch:#cfc6a2" title="Bege"></button>
+          <button type="button" data-wall-color="#b7c4ca" style="--swatch:#b7c4ca" title="Cinza azulado"></button>
+          <button type="button" data-wall-color="#a9c3ad" style="--swatch:#a9c3ad" title="Verde suave"></button>
+          <button type="button" data-wall-color="#d5b7aa" style="--swatch:#d5b7aa" title="Terracota suave"></button>
+          <button type="button" data-wall-color="#8f9697" style="--swatch:#8f9697" title="Cinza"></button>
+        </div>
+        <button id="paintSelectedWalls" class="secondary wide">Aplicar cor às paredes selecionadas</button>
         <div class="field"><label for="roadWidthDefault">Largura padrão da rua</label><input id="roadWidthDefault" type="number" value="6" min="2" max="20" step="0.25" /></div>
+      </details>
+
+      <details>
+        <summary>Tamanhos das aberturas</summary>
+        <div class="field-row">
+          <label>Porta — largura<input id="doorWidthDefault" type="number" value="0.90" min="0.55" max="3" step="0.05" /></label>
+          <label>Porta — altura<input id="doorHeightDefault" type="number" value="2.10" min="1.5" max="4" step="0.05" /></label>
+        </div>
+        <div class="field-row">
+          <label>Janela — largura<input id="windowWidthDefault" type="number" value="1.50" min="0.3" max="5" step="0.05" /></label>
+          <label>Janela — altura<input id="windowHeightDefault" type="number" value="1.10" min="0.3" max="3" step="0.05" /></label>
+        </div>
+        <div class="field-row">
+          <label>Portão — largura<input id="gateWidthDefault" type="number" value="3.60" min="1.5" max="12" step="0.1" /></label>
+          <label>Portão — altura<input id="gateHeightDefault" type="number" value="2.20" min="1.5" max="5" step="0.05" /></label>
+        </div>
+        <p class="help-text">A espessura e a altura são ajustadas automaticamente à parede.</p>
+      </details>
+
+      <details>
+        <summary>Gráficos e desempenho</summary>
+        <div class="field"><label>Qualidade<select class="graphics-quality"><option value="low">Econômico — recomendado</option><option value="medium">Equilibrado</option><option value="high">Alto</option></select></label></div>
+        <label class="check"><input class="shadows-toggle" type="checkbox" /> Ativar sombras</label>
+        <div class="field"><label>Sensibilidade do mouse <span class="sensitivity-value">1,00</span><input class="sensitivity-control" type="range" min="0.25" max="2.5" step="0.05" value="1" /></label></div>
+        <p class="help-text">O modo Econômico reduz resolução e limita a renderização para funcionar melhor em computadores escolares.</p>
       </details>
 
       <details>
@@ -238,7 +277,7 @@ app.innerHTML = `
       <div class="sidebar-heading">
         <div><span class="eyebrow">PROPRIEDADES</span><h3 id="selectionTitle">Nenhuma seleção</h3></div>
       </div>
-      <div id="noSelection" class="empty-state">Clique em um objeto. Segure <strong>Shift</strong> para selecionar vários.</div>
+      <div id="noSelection" class="empty-state">Clique em um objeto. Use <strong>Shift + clique</strong> para somar itens ou <strong>Shift + arraste</strong> para selecionar uma área como no CAD.</div>
       <div id="propertiesForm" class="hidden">
         <div class="action-strip">
           <button data-transform="translate" class="active">Mover</button>
@@ -306,12 +345,20 @@ app.innerHTML = `
     </aside>
 
     <div id="measurementBadge" class="hidden"></div>
+    <div id="selectionMarquee" class="hidden"></div>
     <div id="builderStatus">Modo selecionar.</div>
   </section>
 
   <section id="gameUi" class="hidden">
     <div id="gameControls" class="game-panel"><strong>Controles</strong><br>W, A, S, D: andar<br>Shift: correr<br>E ou clique: interagir<br>1: acenar · 2: apontar<br><small>O teclado fica dedicado ao jogo enquanto esta tela estiver ativa.</small></div>
     <div id="playersPanel" class="game-panel"><strong>Participantes</strong><ol id="playersList"></ol></div>
+    <div id="gameSettings" class="game-panel">
+      <strong>Gráficos</strong>
+      <label>Qualidade<select class="graphics-quality"><option value="low">Econômico</option><option value="medium">Equilibrado</option><option value="high">Alto</option></select></label>
+      <label class="game-check"><input class="shadows-toggle" type="checkbox" /> Sombras</label>
+      <label>Sensibilidade <span class="sensitivity-value">1,00</span><input class="sensitivity-control" type="range" min="0.25" max="2.5" step="0.05" value="1" /></label>
+      <small>Pressione Esc para liberar o mouse e alterar.</small>
+    </div>
     <button id="exitGame" class="danger">Sair</button>
     <div id="crosshair"></div>
     <div id="interactionHint"></div>
@@ -342,6 +389,7 @@ const builderUi = $('#builderUi');
 const gameUi = $('#gameUi');
 const builderStatus = $('#builderStatus');
 const measurementBadge = $('#measurementBadge');
+const selectionMarquee = $('#selectionMarquee');
 const playersList = $('#playersList');
 const toast = $('#toast');
 const interactionHint = $('#interactionHint');
@@ -371,18 +419,25 @@ if (!supabase) {
   publishButton.disabled = true;
 }
 
+let savedPerformance = {};
+try { savedPerformance = JSON.parse(localStorage.getItem('empresa3d-performance-v3') || '{}'); } catch { savedPerformance = {}; }
+const initialQuality = ['low', 'medium', 'high'].includes(savedPerformance.quality) ? savedPerformance.quality : 'low';
+const initialShadows = Boolean(savedPerformance.shadows);
+const initialSensitivity = THREE.MathUtils.clamp(Number(savedPerformance.sensitivity) || 1, 0.25, 2.5);
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xbcc7c4);
 scene.fog = new THREE.Fog(0xbcc7c4, 65, 180);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ antialias: initialQuality === 'high', powerPreference: 'high-performance', precision: 'mediump' });
 renderer.domElement.className = 'webgl';
 renderer.domElement.tabIndex = 0;
 renderer.domElement.setAttribute('aria-label', 'Área 3D do simulador');
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, initialQuality === 'high' ? 1.5 : initialQuality === 'medium' ? 1 : 0.75));
 renderer.setSize(innerWidth, innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = initialShadows;
+renderer.shadowMap.type = initialQuality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+renderer.shadowMap.autoUpdate = initialShadows;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 app.prepend(renderer.domElement);
 
@@ -417,6 +472,7 @@ mapControls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
 mapControls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
 
 const pointerControls = new PointerLockControls(gameCamera, renderer.domElement);
+pointerControls.pointerSpeed = initialSensitivity;
 let activeBuilderCamera = topCamera;
 
 const transform = new TransformControls(activeBuilderCamera, renderer.domElement);
@@ -427,8 +483,8 @@ scene.add(transform.getHelper());
 scene.add(new THREE.HemisphereLight(0xffffff, 0x59635e, 2.25));
 const sun = new THREE.DirectionalLight(0xfff3d4, 3.2);
 sun.position.set(-25, 36, 18);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.castShadow = initialShadows;
+sun.shadow.mapSize.set(initialQuality === 'high' ? 2048 : initialQuality === 'medium' ? 1024 : 512, initialQuality === 'high' ? 2048 : initialQuality === 'medium' ? 1024 : 512);
 sun.shadow.camera.left = -70;
 sun.shadow.camera.right = 70;
 sun.shadow.camera.top = 70;
@@ -440,7 +496,7 @@ const floor = new THREE.Mesh(
   new THREE.MeshStandardMaterial({ color: 0xc8c2aa, roughness: 1 }),
 );
 floor.rotation.x = -Math.PI / 2;
-floor.receiveShadow = true;
+floor.receiveShadow = initialShadows;
 floor.userData.isFloor = true;
 scene.add(floor);
 
@@ -459,6 +515,15 @@ const helperLayer = new THREE.Group();
 scene.add(helperLayer);
 const previewLayer = new THREE.Group();
 scene.add(previewLayer);
+const snapMarker = new THREE.Mesh(
+  new THREE.RingGeometry(0.16, 0.25, 24),
+  new THREE.MeshBasicMaterial({ color: 0xffdf62, transparent: true, opacity: 0.95, depthTest: false, side: THREE.DoubleSide }),
+);
+snapMarker.rotation.x = -Math.PI / 2;
+snapMarker.position.y = 0.035;
+snapMarker.renderOrder = 45;
+snapMarker.visible = false;
+helperLayer.add(snapMarker);
 
 let appMode = 'home';
 let builderView = 'top';
@@ -470,6 +535,7 @@ let referencePlane = null;
 let selected = null;
 const selectedRoots = new Set();
 const selectionHelpers = new Map();
+let selectionDrag = null;
 let transformStartState = null;
 let realtimeChannel = null;
 let currentRoom = '';
@@ -482,19 +548,108 @@ let canvasPointerStart = null;
 let canvasPointerMoved = false;
 const remotePlayers = new Map();
 const keys = new Set();
+let staticCollisionBoxes = [];
+let dynamicCollisionRoots = [];
+let interactionMeshes = [];
+let lastInteractionCheck = 0;
+const playerCollisionBox = new THREE.Box3();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const centerPointer = new THREE.Vector2(0, 0);
 const clock = new THREE.Clock();
 let elapsed = 0;
+let lastRenderedAt = 0;
 
 const settings = {
   grid: Number($('#gridSize').value),
   smartSnap: $('#smartSnap').checked,
+  orthogonal: $('#orthogonalMode').checked,
+  showMeasurements: $('#showMeasurements').checked,
   wallHeight: Number($('#wallHeightDefault').value),
   wallDepth: Number($('#wallDepthDefault').value),
+  wallColor: $('#wallColorDefault').value,
   roadWidth: Number($('#roadWidthDefault').value),
+  doorWidth: Number($('#doorWidthDefault').value),
+  doorHeight: Number($('#doorHeightDefault').value),
+  windowWidth: Number($('#windowWidthDefault').value),
+  windowHeight: Number($('#windowHeightDefault').value),
+  gateWidth: Number($('#gateWidthDefault').value),
+  gateHeight: Number($('#gateHeightDefault').value),
+  quality: initialQuality,
+  shadows: initialShadows,
+  sensitivity: initialSensitivity,
+  renderInterval: initialQuality === 'low' ? 1000 / 30 : initialQuality === 'medium' ? 1000 / 45 : 0,
 };
+
+const QUALITY_PROFILES = {
+  low: { pixelRatio: 0.75, shadowSize: 512, renderInterval: 1000 / 30, fogFar: 135 },
+  medium: { pixelRatio: 1, shadowSize: 1024, renderInterval: 1000 / 45, fogFar: 165 },
+  high: { pixelRatio: 1.5, shadowSize: 2048, renderInterval: 0, fogFar: 190 },
+};
+
+const SHADOW_KINDS = new Set(['wall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'rack', 'server', 'stairs']);
+function shadowEligible(root) {
+  return SHADOW_KINDS.has(root?.userData?.kind);
+}
+
+function applyShadowFlagsToRoot(root) {
+  const eligible = settings.shadows && shadowEligible(root);
+  root?.traverse((child) => {
+    if (!child.isMesh) return;
+    child.castShadow = eligible;
+    child.receiveShadow = settings.shadows && root.userData.kind !== 'cable';
+  });
+}
+
+function syncPerformanceControls() {
+  $$('.graphics-quality').forEach((control) => { control.value = settings.quality; });
+  $$('.shadows-toggle').forEach((control) => { control.checked = settings.shadows; });
+  $$('.sensitivity-control').forEach((control) => { control.value = String(settings.sensitivity); });
+  $$('.sensitivity-value').forEach((target) => { target.textContent = settings.sensitivity.toFixed(2).replace('.', ','); });
+}
+
+function applyPerformanceSettings({ persist = true } = {}) {
+  const profile = QUALITY_PROFILES[settings.quality] || QUALITY_PROFILES.low;
+  settings.renderInterval = profile.renderInterval;
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, profile.pixelRatio));
+  renderer.setSize(innerWidth, innerHeight, false);
+  renderer.shadowMap.enabled = settings.shadows;
+  renderer.shadowMap.autoUpdate = settings.shadows;
+  renderer.shadowMap.type = settings.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+  sun.castShadow = settings.shadows;
+  sun.shadow.mapSize.set(profile.shadowSize, profile.shadowSize);
+  if (sun.shadow.map) {
+    sun.shadow.map.dispose();
+    sun.shadow.map = null;
+  }
+  floor.receiveShadow = settings.shadows;
+  scene.fog.far = profile.fogFar;
+  pointerControls.pointerSpeed = settings.sensitivity;
+  perspectiveControls.rotateSpeed = 0.65 * settings.sensitivity;
+  perspectiveControls.panSpeed = 0.75 * settings.sensitivity;
+  mapControls.panSpeed = 0.75 * settings.sensitivity;
+  for (const root of world.children) applyShadowFlagsToRoot(root);
+  for (const avatar of avatarLayer.children) {
+    avatar.traverse((child) => {
+      if (!child.isMesh) return;
+      child.castShadow = settings.shadows && settings.quality === 'high';
+      child.receiveShadow = false;
+    });
+  }
+  syncPerformanceControls();
+  if (persist) {
+    localStorage.setItem('empresa3d-performance-v3', JSON.stringify({
+      quality: settings.quality,
+      shadows: settings.shadows,
+      sensitivity: settings.sensitivity,
+    }));
+  }
+}
+
+function setPerformanceQuality(value) {
+  settings.quality = ['low', 'medium', 'high'].includes(value) ? value : 'low';
+  applyPerformanceSettings();
+}
 
 const history = [];
 let historyIndex = -1;
@@ -540,6 +695,7 @@ function loadWorld(data) {
     if (root) world.add(root);
   }
   finalizeLoadedWorld(world);
+  for (const root of world.children) applyShadowFlagsToRoot(root);
   refreshValidation();
 }
 
@@ -606,6 +762,7 @@ function updateVersionList() {
 
 function addRoot(root, label = 'Objeto adicionado') {
   world.add(root);
+  applyShadowFlagsToRoot(root);
   if (root.userData.kind === 'wall') rebuildWall(root, world);
   if (root.userData.kind === 'cable') updateAllCables(world);
   selectOnly(root);
@@ -909,6 +1066,105 @@ function pickedRoot(event) {
   return hits.find((hit) => hit.object.userData.root?.visible)?.object?.userData?.root || null;
 }
 
+function projectedScreenBounds(root, camera) {
+  const box = new THREE.Box3().setFromObject(root);
+  if (box.isEmpty()) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const corners = [];
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) corners.push(new THREE.Vector3(x, y, z));
+    }
+  }
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const corner of corners) {
+    corner.project(camera);
+    const x = rect.left + (corner.x + 1) * rect.width / 2;
+    const y = rect.top + (1 - corner.y) * rect.height / 2;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function updateSelectionMarquee() {
+  if (!selectionDrag) return;
+  const left = Math.min(selectionDrag.startX, selectionDrag.currentX);
+  const top = Math.min(selectionDrag.startY, selectionDrag.currentY);
+  const width = Math.abs(selectionDrag.currentX - selectionDrag.startX);
+  const height = Math.abs(selectionDrag.currentY - selectionDrag.startY);
+  selectionMarquee.style.left = `${left}px`;
+  selectionMarquee.style.top = `${top}px`;
+  selectionMarquee.style.width = `${width}px`;
+  selectionMarquee.style.height = `${height}px`;
+  selectionMarquee.classList.toggle('crossing', selectionDrag.currentX < selectionDrag.startX);
+  selectionMarquee.classList.remove('hidden');
+}
+
+function beginAreaSelection(event) {
+  selectionDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    currentX: event.clientX,
+    currentY: event.clientY,
+    additive: event.ctrlKey || event.metaKey,
+  };
+  mapControls.enabled = false;
+  perspectiveControls.enabled = false;
+  renderer.domElement.setPointerCapture?.(event.pointerId);
+  updateSelectionMarquee();
+}
+
+function finishAreaSelection(event) {
+  if (!selectionDrag) return false;
+  selectionDrag.currentX = event.clientX;
+  selectionDrag.currentY = event.clientY;
+  const drag = selectionDrag;
+  selectionDrag = null;
+  selectionMarquee.classList.add('hidden');
+  selectionMarquee.classList.remove('crossing');
+  try { renderer.domElement.releasePointerCapture?.(drag.pointerId); } catch { /* sem captura ativa */ }
+  updateBuilderControlBindings();
+
+  const distance = Math.hypot(drag.currentX - drag.startX, drag.currentY - drag.startY);
+  if (distance < 6) {
+    selectObject(pickedRoot(event), event.shiftKey || drag.additive);
+    return true;
+  }
+
+  const selectionRect = {
+    minX: Math.min(drag.startX, drag.currentX),
+    minY: Math.min(drag.startY, drag.currentY),
+    maxX: Math.max(drag.startX, drag.currentX),
+    maxY: Math.max(drag.startY, drag.currentY),
+  };
+  const crossing = drag.currentX < drag.startX;
+  const matches = [];
+  for (const root of world.children) {
+    if (!root.visible || root.userData.kind === 'cable') continue;
+    const bounds = projectedScreenBounds(root, activeBuilderCamera);
+    if (!bounds) continue;
+    const intersects = bounds.maxX >= selectionRect.minX && bounds.minX <= selectionRect.maxX && bounds.maxY >= selectionRect.minY && bounds.minY <= selectionRect.maxY;
+    const contained = bounds.minX >= selectionRect.minX && bounds.maxX <= selectionRect.maxX && bounds.minY >= selectionRect.minY && bounds.maxY <= selectionRect.maxY;
+    if (crossing ? intersects : contained) matches.push(root);
+  }
+
+  if (!drag.additive) selectedRoots.clear();
+  for (const root of matches) selectedRoots.add(root);
+  selected = [...selectedRoots].at(-1) || null;
+  attachTransform();
+  refreshSelectionHelpers();
+  syncPropertiesForm();
+  setBuilderStatus(`${matches.length} objeto(s) encontrados na seleção em área. Pressione Delete para apagar.`);
+  return true;
+}
+
 function snapGrid(value) {
   return Math.round(value / settings.grid) * settings.grid;
 }
@@ -929,9 +1185,18 @@ function smartSnapPoint(raw, start = null, kind = 'wall') {
   let reason = '';
   point.x = snapGrid(point.x);
   point.z = snapGrid(point.z);
-  if (!settings.smartSnap) return { point, reason: 'grade' };
-
   const threshold = Math.max(0.34, settings.grid * 1.55);
+  if (!settings.smartSnap) {
+    if (start && settings.orthogonal) {
+      const dx = point.x - start.x;
+      const dz = point.z - start.z;
+      if (Math.abs(dx) >= Math.abs(dz)) point.z = start.z;
+      else point.x = start.x;
+      reason = 'modo ortogonal';
+    }
+    return { point, reason: reason || 'grade' };
+  }
+
   let nearestEndpoint = null;
   let nearestDistance = Infinity;
   for (const endpoint of endpointCandidates(kind)) {
@@ -957,7 +1222,11 @@ function smartSnapPoint(raw, start = null, kind = 'wall') {
   if (start && point.distanceTo(start) > 0.01 && !nearestEndpoint && reason !== 'encaixado à parede existente') {
     const dx = point.x - start.x;
     const dz = point.z - start.z;
-    if (Math.abs(dx) < threshold) {
+    if (settings.orthogonal) {
+      if (Math.abs(dx) >= Math.abs(dz)) point.z = start.z;
+      else point.x = start.x;
+      reason = 'modo ortogonal';
+    } else if (Math.abs(dx) < threshold) {
       point.x = start.x;
       reason = 'alinhado na vertical';
     } else if (Math.abs(dz) < threshold) {
@@ -988,6 +1257,17 @@ function clearPreview() {
   }
   previewObject = null;
   measurementBadge.classList.add('hidden');
+  snapMarker.visible = false;
+}
+
+function showSnapMarker(point, reason = '') {
+  if (!point || appMode !== 'builder') {
+    snapMarker.visible = false;
+    return;
+  }
+  snapMarker.position.set(point.x, 0.035, point.z);
+  snapMarker.material.color.set(reason.includes('canto') ? 0x66e3a4 : reason.includes('parede') ? 0x71bfff : 0xffdf62);
+  snapMarker.visible = true;
 }
 
 function showSegmentPreview(start, end, kind, reason = '') {
@@ -998,7 +1278,7 @@ function showSegmentPreview(start, end, kind, reason = '') {
   if (length < 0.02) return;
   const width = kind === 'wall' ? settings.wallDepth : kind === 'road' ? settings.roadWidth : 1.5;
   const height = kind === 'wall' ? settings.wallHeight : 0.05;
-  const material = new THREE.MeshBasicMaterial({ color: 0xffdd63, transparent: true, opacity: 0.5, depthTest: false });
+  const material = new THREE.MeshBasicMaterial({ color: kind === 'wall' ? settings.wallColor : 0xffdd63, transparent: true, opacity: 0.5, depthTest: false });
   previewObject = new THREE.Mesh(new THREE.BoxGeometry(length, height, width), material);
   previewObject.position.set((start.x + end.x) / 2, kind === 'wall' ? height / 2 : 0.06, (start.z + end.z) / 2);
   previewObject.rotation.y = -Math.atan2(dz, dx);
@@ -1006,7 +1286,7 @@ function showSegmentPreview(start, end, kind, reason = '') {
   previewLayer.add(previewObject);
   const angle = ((THREE.MathUtils.radToDeg(Math.atan2(dz, dx)) % 360) + 360) % 360;
   measurementBadge.textContent = `${length.toFixed(2)} m · ${angle.toFixed(0)}°${reason ? ` · ${reason}` : ''}`;
-  measurementBadge.classList.remove('hidden');
+  measurementBadge.classList.toggle('hidden', !settings.showMeasurements);
 }
 
 function updateBuilderControlBindings() {
@@ -1020,6 +1300,7 @@ function updateBuilderControlBindings() {
 
 function setTool(tool) {
   currentTool = tool;
+  if (tool === 'windowSelect' && builderView !== 'top') setBuilderView('top');
   segmentStart = null;
   cableStart = null;
   canvasPointerStart = null;
@@ -1027,14 +1308,24 @@ function setTool(tool) {
   clearPreview();
   updateBuilderControlBindings();
   $$('[data-tool]').forEach((button) => button.classList.toggle('active', button.dataset.tool === tool));
-  if (tool === 'select') setBuilderStatus('Clique para selecionar. Arraste com o botão esquerdo para mover a câmera.');
+  if (tool === 'select') setBuilderStatus('Clique para selecionar. Arraste para mover a câmera. Shift + arraste cria uma seleção em área.');
+  else if (tool === 'windowSelect') setBuilderStatus('Arraste um retângulo: esquerda→direita seleciona dentro; direita→esquerda também seleciona o que tocar.');
+  else if (tool === 'paint') setBuilderStatus('Clique em uma parede para aplicar a cor escolhida. Se várias paredes estiverem selecionadas, todas serão pintadas.');
   else if (['wall', 'road', 'sidewalk'].includes(tool)) setBuilderStatus(`Clique no início e no final: ${objectLabel(tool)}. Use o botão direito para mover a câmera.`);
   else if (tool === 'cable') setBuilderStatus('Clique no primeiro e depois no segundo equipamento de rede.');
 }
 
+function openingDefaults(kind) {
+  if (kind === 'door') return { width: settings.doorWidth, height: settings.doorHeight };
+  if (kind === 'window') return { width: settings.windowWidth, height: settings.windowHeight };
+  if (kind === 'slidingGate') return { width: settings.gateWidth, height: settings.gateHeight };
+  return {};
+}
+
 function addOpening(kind, point) {
-  const root = createObject(kind, point, {});
+  const root = createObject(kind, point, openingDefaults(kind));
   world.add(root);
+  applyShadowFlagsToRoot(root);
   const result = snapOpeningToWall(root, world, point, { maxDistance: 1.8, grid: settings.grid });
   if (!result.ok) {
     world.remove(root);
@@ -1054,7 +1345,7 @@ function createSegmentTool(kind, start, end) {
     return;
   }
   let root;
-  if (kind === 'wall') root = createWall(start, end, { height: settings.wallHeight, thickness: settings.wallDepth, world });
+  if (kind === 'wall') root = createWall(start, end, { height: settings.wallHeight, thickness: settings.wallDepth, color: settings.wallColor, world });
   else if (kind === 'road') root = createRoad(start, end, { width: settings.roadWidth });
   else root = createSidewalk(start, end, { width: 1.5 });
   addRoot(root, `${objectLabel(kind)} criada`);
@@ -1089,9 +1380,38 @@ function handleCableClick(root) {
   setBuilderStatus('Cabo de rede conectado.');
 }
 
+function paintWallTargets(clickedRoot = null) {
+  let targets = [];
+  if (clickedRoot?.userData.kind === 'wall' && selectedRoots.has(clickedRoot)) {
+    targets = [...selectedRoots].filter((root) => root.userData.kind === 'wall' && !root.userData.locked);
+  } else if (clickedRoot?.userData.kind === 'wall' && !clickedRoot.userData.locked) {
+    targets = [clickedRoot];
+  } else {
+    targets = [...selectedRoots].filter((root) => root.userData.kind === 'wall' && !root.userData.locked);
+  }
+  if (!targets.length) {
+    setBuilderStatus('Nenhuma parede disponível para pintar. Selecione ou clique em uma parede.');
+    return;
+  }
+  for (const wall of targets) applyObjectColor(wall, settings.wallColor);
+  if (clickedRoot && !selectedRoots.has(clickedRoot)) selectOnly(clickedRoot);
+  refreshSelectionHelpers();
+  syncPropertiesForm();
+  commitHistory('Paredes pintadas');
+  setBuilderStatus(`${targets.length} parede(s) pintada(s).`);
+}
+
 renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (appMode !== 'builder' || transform.dragging || transform.axis || event.button !== 0) return;
+
+  const wantsAreaSelection = builderView === 'top' && (currentTool === 'windowSelect' || (currentTool === 'select' && event.shiftKey));
+  if (wantsAreaSelection) {
+    event.preventDefault();
+    event.stopPropagation();
+    beginAreaSelection(event);
+    return;
+  }
 
   if (currentTool === 'select') {
     canvasPointerStart = { x: event.clientX, y: event.clientY };
@@ -1100,13 +1420,21 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
   }
 
   const root = pickedRoot(event);
+  if (currentTool === 'paint') {
+    event.preventDefault();
+    event.stopPropagation();
+    paintWallTargets(root);
+    return;
+  }
+
   if (['wall', 'road', 'sidewalk'].includes(currentTool)) {
     const raw = groundPoint(event);
     if (!raw) return;
     const snapped = smartSnapPoint(raw, segmentStart, currentTool);
+    showSnapMarker(snapped.point, snapped.reason);
     if (!segmentStart) {
       segmentStart = snapped.point;
-      setBuilderStatus('Agora clique no ponto final.');
+      setBuilderStatus('Ponto inicial definido. Agora clique no ponto final. Esc cancela; F8 ativa o modo ortogonal.');
     } else {
       createSegmentTool(currentTool, segmentStart, snapped.point);
       segmentStart = null;
@@ -1125,7 +1453,9 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     const kind = currentTool.slice(4);
     const raw = groundPoint(event);
     if (!raw) return;
-    const point = smartSnapPoint(raw, null, kind).point;
+    const snapped = smartSnapPoint(raw, null, kind);
+    const point = snapped.point;
+    showSnapMarker(point, snapped.reason);
     if (OPENING_KINDS.has(kind)) addOpening(kind, point);
     else {
       const created = createObject(kind, point, {});
@@ -1133,9 +1463,17 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     }
     setTool('select');
   }
-});
+}, { capture: true });
 
 renderer.domElement.addEventListener('pointermove', (event) => {
+  if (selectionDrag) {
+    selectionDrag.currentX = event.clientX;
+    selectionDrag.currentY = event.clientY;
+    updateSelectionMarquee();
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   if (canvasPointerStart && currentTool === 'select') {
     const distance = Math.hypot(event.clientX - canvasPointerStart.x, event.clientY - canvasPointerStart.y);
     if (distance > 5) canvasPointerMoved = true;
@@ -1145,19 +1483,32 @@ renderer.domElement.addEventListener('pointermove', (event) => {
   if (!raw) return;
   const snapped = smartSnapPoint(raw, segmentStart, currentTool);
   showSegmentPreview(segmentStart, snapped.point, currentTool, snapped.reason);
-});
+  showSnapMarker(snapped.point, snapped.reason);
+}, { capture: true });
 
 renderer.domElement.addEventListener('pointerup', (event) => {
+  if (selectionDrag && event.button === 0) {
+    event.preventDefault();
+    event.stopPropagation();
+    finishAreaSelection(event);
+    return;
+  }
   if (appMode !== 'builder' || event.button !== 0 || currentTool !== 'select' || !canvasPointerStart) return;
   const wasClick = !canvasPointerMoved;
   canvasPointerStart = null;
   canvasPointerMoved = false;
-  if (wasClick && !transform.dragging && !transform.axis) selectObject(pickedRoot(event), event.shiftKey);
-});
+  if (wasClick && !transform.dragging && !transform.axis) selectObject(pickedRoot(event), event.shiftKey || event.ctrlKey || event.metaKey);
+}, { capture: true });
 
-renderer.domElement.addEventListener('pointercancel', () => {
+renderer.domElement.addEventListener('pointercancel', (event) => {
+  if (selectionDrag) {
+    selectionDrag = null;
+    selectionMarquee.classList.add('hidden');
+    updateBuilderControlBindings();
+  }
   canvasPointerStart = null;
   canvasPointerMoved = false;
+  try { renderer.domElement.releasePointerCapture?.(event.pointerId); } catch { /* sem captura */ }
 });
 
 transform.addEventListener('dragging-changed', () => {
@@ -1280,6 +1631,11 @@ function closeEquipment() {
 function makeRemoteAvatar(player) {
   const root = createAvatar(player);
   avatarLayer.add(root);
+  root.traverse((child) => {
+    if (!child.isMesh) return;
+    child.castShadow = settings.shadows && settings.quality === 'high';
+    child.receiveShadow = false;
+  });
   return root;
 }
 
@@ -1409,6 +1765,7 @@ async function joinOnline(name, room) {
       const objects = Array.isArray(payload?.scene) ? payload.scene : payload?.scene?.objects;
       if (Array.isArray(objects)) {
         loadWorld(objects);
+        rebuildGameCaches();
         showToast('O cenário foi atualizado.');
       }
     })
@@ -1490,40 +1847,55 @@ function startGame() {
   transform.detach();
   gameCamera.position.set(localPlayer?.x ?? 0, 1.7, localPlayer?.z ?? 12);
   gameCamera.rotation.set(0, localPlayer?.ry ?? 0, 0);
+  rebuildGameCaches();
   updatePlayersList();
   renderer.domElement.focus({ preventScroll: true });
   setTimeout(() => pointerControls.lock(), 100);
 }
 
-function collisionMeshes(root) {
-  if (root.userData.kind === 'wall') return root.children.filter((child) => child.isMesh);
-  if (root.userData.kind === 'door' || root.userData.kind === 'slidingGate') {
-    return root.userData.openProgress > 0.72 ? [] : root.userData.movingPart?.children?.filter((child) => child.isMesh) || [];
+function rebuildGameCaches() {
+  staticCollisionBoxes = [];
+  dynamicCollisionRoots = [];
+  interactionMeshes = [];
+  world.updateMatrixWorld(true);
+
+  const staticKinds = new Set(['table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer']);
+  for (const root of world.children) {
+    const kind = root.userData.kind;
+    if (kind === 'wall') {
+      for (const piece of root.userData.collisionPieces || []) {
+        const center = new THREE.Vector3().fromArray(piece.center);
+        const size = new THREE.Vector3().fromArray(piece.size);
+        const localBox = new THREE.Box3().setFromCenterAndSize(center, size);
+        staticCollisionBoxes.push(localBox.applyMatrix4(root.matrixWorld));
+      }
+    } else if (kind === 'door' || kind === 'slidingGate') {
+      dynamicCollisionRoots.push(root);
+    } else if (staticKinds.has(kind)) {
+      staticCollisionBoxes.push(new THREE.Box3().setFromObject(root));
+    }
+
+    if (['door', 'slidingGate'].includes(kind) || NETWORK_KINDS.has(kind)) {
+      root.traverse((child) => { if (child.isMesh) interactionMeshes.push(child); });
+    }
   }
-  if (['table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer'].includes(root.userData.kind)) return [root];
-  return [];
 }
 
 function collides(position) {
-  const playerBox = new THREE.Box3(
-    new THREE.Vector3(position.x - 0.29, 0.08, position.z - 0.29),
-    new THREE.Vector3(position.x + 0.29, 1.82, position.z + 0.29),
-  );
-  for (const root of world.children) {
-    for (const object of collisionMeshes(root)) {
-      const box = new THREE.Box3().setFromObject(object);
-      if (box.intersectsBox(playerBox)) return true;
-    }
+  playerCollisionBox.min.set(position.x - 0.29, 0.08, position.z - 0.29);
+  playerCollisionBox.max.set(position.x + 0.29, 1.82, position.z + 0.29);
+  for (const box of staticCollisionBoxes) if (box.intersectsBox(playerCollisionBox)) return true;
+  for (const root of dynamicCollisionRoots) {
+    if (root.userData.openProgress > 0.72 || !root.userData.movingPart) continue;
+    const box = new THREE.Box3().setFromObject(root.userData.movingPart);
+    if (box.intersectsBox(playerCollisionBox)) return true;
   }
   return false;
 }
 
 function findGameInteraction() {
   raycaster.setFromCamera(centerPointer, gameCamera);
-  const hit = raycaster.intersectObjects(world.children, true).find((item) => {
-    const root = item.object?.userData?.root;
-    return item.distance <= 4.2 && root && (['door', 'slidingGate'].includes(root.userData.kind) || NETWORK_KINDS.has(root.userData.kind));
-  });
+  const hit = raycaster.intersectObjects(interactionMeshes, false).find((item) => item.distance <= 4.2);
   const root = hit?.object?.userData?.root || null;
   interactionRoot = root;
   if (!root) {
@@ -1554,7 +1926,7 @@ function sendGesture(type) {
 function initAvatarPreview() {
   const container = $('#avatarPreview');
   const previewRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  previewRenderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  previewRenderer.setPixelRatio(Math.min(devicePixelRatio || 1, settings.quality === 'high' ? 1.5 : settings.quality === 'medium' ? 1 : 0.75));
   previewRenderer.setSize(210, 220);
   previewRenderer.outputColorSpace = THREE.SRGBColorSpace;
   container.appendChild(previewRenderer.domElement);
@@ -1582,9 +1954,11 @@ function initAvatarPreview() {
   });
 
   function renderPreview(time) {
-    previewAvatar.rotation.y = Math.sin(time * 0.00045) * 0.35;
-    updateAvatar(previewAvatar, 0.016, time * 0.001);
-    previewRenderer.render(previewScene, previewCamera);
+    if (appMode === 'home' && !document.hidden) {
+      previewAvatar.rotation.y = Math.sin(time * 0.00045) * 0.35;
+      updateAvatar(previewAvatar, 0.016, time * 0.001);
+      previewRenderer.render(previewScene, previewCamera);
+    }
     requestAnimationFrame(renderPreview);
   }
   requestAnimationFrame(renderPreview);
@@ -1718,10 +2092,49 @@ $('#gridSize').addEventListener('change', (event) => {
   transform.setTranslationSnap(settings.grid);
 });
 $('#smartSnap').addEventListener('change', (event) => { settings.smartSnap = event.target.checked; });
+$('#orthogonalMode').addEventListener('change', (event) => { settings.orthogonal = event.target.checked; });
 $('#showGrid').addEventListener('change', (event) => { grid.visible = event.target.checked; });
+$('#showMeasurements').addEventListener('change', (event) => {
+  settings.showMeasurements = event.target.checked;
+  if (!settings.showMeasurements) measurementBadge.classList.add('hidden');
+});
 $('#wallHeightDefault').addEventListener('change', (event) => { settings.wallHeight = Math.max(1.8, Number(event.target.value) || 3); });
 $('#wallDepthDefault').addEventListener('change', (event) => { settings.wallDepth = Math.max(0.08, Number(event.target.value) || 0.16); });
+$('#wallColorDefault').addEventListener('input', (event) => { settings.wallColor = event.target.value; });
 $('#roadWidthDefault').addEventListener('change', (event) => { settings.roadWidth = Math.max(2, Number(event.target.value) || 6); });
+$('#doorWidthDefault').addEventListener('change', (event) => { settings.doorWidth = Math.max(0.55, Number(event.target.value) || 0.9); });
+$('#doorHeightDefault').addEventListener('change', (event) => { settings.doorHeight = Math.max(1.5, Number(event.target.value) || 2.1); });
+$('#windowWidthDefault').addEventListener('change', (event) => { settings.windowWidth = Math.max(0.3, Number(event.target.value) || 1.5); });
+$('#windowHeightDefault').addEventListener('change', (event) => { settings.windowHeight = Math.max(0.3, Number(event.target.value) || 1.1); });
+$('#gateWidthDefault').addEventListener('change', (event) => { settings.gateWidth = Math.max(1.5, Number(event.target.value) || 3.6); });
+$('#gateHeightDefault').addEventListener('change', (event) => { settings.gateHeight = Math.max(1.5, Number(event.target.value) || 2.2); });
+
+$$('[data-wall-color]').forEach((button) => button.addEventListener('click', () => {
+  settings.wallColor = button.dataset.wallColor;
+  $('#wallColorDefault').value = settings.wallColor;
+  $$('.color-swatches button').forEach((item) => item.classList.toggle('active', item === button));
+}));
+$('#paintSelectedWalls').addEventListener('click', () => paintWallTargets());
+
+$$('.graphics-quality').forEach((control) => control.addEventListener('change', (event) => setPerformanceQuality(event.target.value)));
+$$('.shadows-toggle').forEach((control) => control.addEventListener('change', (event) => {
+  settings.shadows = event.target.checked;
+  applyPerformanceSettings();
+}));
+$$('.sensitivity-control').forEach((control) => control.addEventListener('input', (event) => {
+  settings.sensitivity = THREE.MathUtils.clamp(Number(event.target.value) || 1, 0.25, 2.5);
+  pointerControls.pointerSpeed = settings.sensitivity;
+  syncPerformanceControls();
+  localStorage.setItem('empresa3d-performance-v3', JSON.stringify({ quality: settings.quality, shadows: settings.shadows, sensitivity: settings.sensitivity }));
+}));
+
+$('#propColor').addEventListener('input', (event) => {
+  for (const root of selectedRoots) if (!root.userData.locked) applyObjectColor(root, event.target.value);
+  refreshSelectionHelpers();
+});
+$('#propColor').addEventListener('change', () => {
+  if (selectedRoots.size) commitHistory('Cores alteradas');
+});
 
 $('#collapseTools').addEventListener('click', () => {
   $('#toolPanel').classList.toggle('collapsed');
@@ -1738,7 +2151,8 @@ renderer.domElement.addEventListener('click', () => {
 const GAME_CAPTURED_CODES = new Set([
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'ShiftLeft', 'ShiftRight',
   'Digit1', 'Digit2', 'Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'Backspace', 'Home', 'End', 'PageUp', 'PageDown', 'Slash', 'F1', 'F3', 'F5', 'F7', 'F10',
+  'Backspace', 'Home', 'End', 'PageUp', 'PageDown', 'Slash',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
 ]);
 
 function preventBrowserCommandWhilePlaying(event) {
@@ -1759,7 +2173,13 @@ document.addEventListener('pointerlockchange', () => {
 addEventListener('keydown', (event) => {
   keys.add(event.code);
   if (appMode === 'builder') {
-    if ((event.ctrlKey || event.metaKey) && event.code === 'KeyZ') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
+    if (event.code === 'F8') {
+      event.preventDefault();
+      settings.orthogonal = !settings.orthogonal;
+      $('#orthogonalMode').checked = settings.orthogonal;
+      setBuilderStatus(`Modo ortogonal ${settings.orthogonal ? 'ativado' : 'desativado'}.`);
+    }
+    else if ((event.ctrlKey || event.metaKey) && event.code === 'KeyZ') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
     else if ((event.ctrlKey || event.metaKey) && event.code === 'KeyY') { event.preventDefault(); redo(); }
     else if ((event.ctrlKey || event.metaKey) && event.code === 'KeyD') { event.preventDefault(); duplicateSelection(); }
     else if (event.code === 'Delete' || event.code === 'Backspace') { if (selectedRoots.size && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) removeRoots([...selectedRoots]); }
@@ -1792,7 +2212,11 @@ function animate() {
   }
 
   if (appMode === 'game') {
-    findGameInteraction();
+    const interactionNow = performance.now();
+    if (interactionNow - lastInteractionCheck > 110) {
+      findGameInteraction();
+      lastInteractionCheck = interactionNow;
+    }
     const forward = Number(keys.has('KeyW')) - Number(keys.has('KeyS'));
     const side = Number(keys.has('KeyD')) - Number(keys.has('KeyA'));
     const moving = Boolean(forward || side);
@@ -1814,7 +2238,8 @@ function animate() {
     }
 
     const now = performance.now();
-    if (realtimeChannel && localPlayer && now - lastMoveSent > 70) {
+    const moveSendInterval = settings.quality === 'low' ? 110 : settings.quality === 'medium' ? 90 : 70;
+    if (realtimeChannel && localPlayer && now - lastMoveSent > moveSendInterval) {
       const look = new THREE.Vector3();
       gameCamera.getWorldDirection(look);
       localPlayer = {
@@ -1843,7 +2268,11 @@ function animate() {
   }
 
   const renderCamera = appMode === 'builder' ? activeBuilderCamera : gameCamera;
-  renderer.render(scene, renderCamera);
+  const renderNow = performance.now();
+  if (!settings.renderInterval || renderNow - lastRenderedAt >= settings.renderInterval) {
+    renderer.render(scene, renderCamera);
+    lastRenderedAt = renderNow;
+  }
 }
 
 function updateCameraAspect() {
@@ -1867,5 +2296,6 @@ if (!restored) {
   clearSelection();
 }
 commitHistory('Estado inicial');
+applyPerformanceSettings({ persist: false });
 showHome();
 animate();

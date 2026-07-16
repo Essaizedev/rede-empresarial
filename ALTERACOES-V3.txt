@@ -1,0 +1,34 @@
+MELHORIAS V3 — PRECISÃO, DESEMPENHO E DESENHO ASSISTIDO
+
+PORTAS E ABERTURAS
+- O marco da porta agora fica inteiramente dentro do vão.
+- A folha encosta no marco nas laterais e na parte superior, sem frestas visíveis.
+- A profundidade da porta, janela e portão acompanha automaticamente a espessura da parede.
+- A altura é limitada automaticamente para caber na parede.
+- Tamanhos padrão de portas, janelas e portões podem ser definidos antes da colocação.
+
+DESEMPENHO
+- Modo Econômico como padrão, pensado para computadores escolares.
+- Qualidade Econômica, Equilibrada e Alta.
+- Sombras podem ser ativadas ou totalmente removidas.
+- Resolução interna e taxa de renderização são ajustadas por nível de qualidade.
+- Colisões estáticas são calculadas uma vez ao entrar na simulação.
+- Interações são verificadas em frequência reduzida.
+- Paredes são unidas em uma única geometria para reduzir chamadas de desenho.
+- Prévia do avatar pausa quando a tela inicial não está visível.
+- Frequência de envio dos movimentos é reduzida no modo Econômico.
+
+CONSTRUÇÃO E CAD
+- Seleção em área igual a CAD: esquerda→direita seleciona apenas dentro; direita→esquerda seleciona também o que cruzar.
+- Shift + arraste faz seleção em área sem abandonar a ferramenta Selecionar.
+- Shift + clique adiciona ou remove objetos individualmente.
+- Delete apaga todos os itens selecionados.
+- Modo ortogonal com F8.
+- Marcador visual mostra cantos, paredes e pontos de encaixe.
+- Medidas e ângulos podem ser mostrados ou ocultados.
+- Cor padrão das novas paredes, paleta de cores e ferramenta Pintar parede.
+- É possível pintar várias paredes selecionadas de uma vez.
+
+CONTROLES
+- Sensibilidade do mouse ajustável.
+- A mesma sensibilidade também afeta rotação e deslocamento da câmera do construtor.

@@ -9,14 +9,14 @@ Aplicação Vite + Three.js + Supabase para construir uma empresa em 3D e explor
 - grade configurável de 10 cm, 25 cm, 50 cm ou 1 m;
 - encaixe automático em cantos e paredes existentes;
 - alinhamento horizontal, vertical e em ângulos próximos;
-- medida e ângulo exibidos durante o desenho;
+- medida, ângulo, modo ortogonal (F8) e marcador visual de encaixe;
 - posição, rotação e dimensões editáveis numericamente;
-- seleção múltipla com Shift;
+- seleção múltipla com Shift e seleção retangular no estilo CAD;
 - mover com as setas, duplicar, bloquear, apagar, desfazer e refazer;
 - versões locais, importação e exportação em JSON.
 
 ### Estrutura e área externa
-- paredes com aberturas reais;
+- paredes coloríveis com aberturas reais e portas sem frestas;
 - portas e janelas que se encaixam e procuram espaço livre automaticamente;
 - portão deslizante para estacionamento;
 - ruas com faixas, calçadas, vagas e áreas verdes;
@@ -71,6 +71,10 @@ O arquivo `vercel.json` já fixa o build correto.
 
 ### Construtor
 - Shift + clique: seleção múltipla;
+- Shift + arraste: seleção retangular;
+- esquerda→direita: apenas objetos totalmente dentro;
+- direita→esquerda: objetos dentro ou tocados;
+- F8: ativar/desativar modo ortogonal;
 - setas: mover pela grade;
 - Shift + setas: mover cinco passos;
 - Ctrl+Z: desfazer;
@@ -80,6 +84,7 @@ O arquivo `vercel.json` já fixa o build correto.
 - botão direito: mover a câmera superior ou girar a vista 3D.
 
 ### Jogo
+- qualidade gráfica, sombras e sensibilidade ajustáveis;
 - W, A, S, D: andar;
 - Shift: correr;
 - mouse: olhar;

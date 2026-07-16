@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 export const OPENING_KINDS = new Set(['door', 'window', 'slidingGate']);
 export const NETWORK_KINDS = new Set(['computer', 'laptop', 'printer', 'network', 'switch', 'router', 'rack', 'server']);
@@ -164,12 +165,13 @@ export function createWall(start, end, options = {}) {
   return root;
 }
 
-function wallPiece(root, x, width, y, height) {
+function wallPieceGeometry(root, geometries, x, width, y, height) {
   if (width < 0.015 || height < 0.015) return;
   const thickness = root.userData.segment.thickness;
-  const piece = makeMesh(new THREE.BoxGeometry(width, height, thickness), root.userData.color || '#cfc6a2');
-  piece.position.set(x, y, 0);
-  root.add(piece);
+  const geometry = new THREE.BoxGeometry(width, height, thickness);
+  geometry.translate(x, y, 0);
+  geometries.push(geometry);
+  root.userData.collisionPieces.push({ center: [x, y, 0], size: [width, height, thickness] });
 }
 
 function openingAt(attachments, position) {
@@ -184,6 +186,7 @@ export function rebuildWall(root, world = null) {
   root.position.set(info.center.x, 0, info.center.y);
   root.rotation.set(0, info.angle, 0);
   root.scale.set(1, 1, 1);
+  root.userData.collisionPieces = [];
 
   const attachments = world
     ? world.children
@@ -210,6 +213,7 @@ export function rebuildWall(root, world = null) {
     boundaries.add(THREE.MathUtils.clamp(attachment.max, 0, info.length));
   }
   const sorted = [...boundaries].sort((a, b) => a - b);
+  const geometries = [];
 
   for (let index = 0; index < sorted.length - 1; index += 1) {
     const left = sorted[index];
@@ -221,25 +225,34 @@ export function rebuildWall(root, world = null) {
     const opening = openingAt(attachments, midpoint);
 
     if (!opening) {
-      wallPiece(root, localX, width, height / 2, height);
+      wallPieceGeometry(root, geometries, localX, width, height / 2, height);
       continue;
     }
 
     if (opening.kind === 'window') {
       const lowerHeight = THREE.MathUtils.clamp(opening.sill, 0, height);
       const upperStart = THREE.MathUtils.clamp(opening.sill + opening.openingHeight, 0, height);
-      if (lowerHeight > 0) wallPiece(root, localX, width, lowerHeight / 2, lowerHeight);
-      if (upperStart < height) wallPiece(root, localX, width, upperStart + (height - upperStart) / 2, height - upperStart);
+      if (lowerHeight > 0) wallPieceGeometry(root, geometries, localX, width, lowerHeight / 2, lowerHeight);
+      if (upperStart < height) wallPieceGeometry(root, geometries, localX, width, upperStart + (height - upperStart) / 2, height - upperStart);
     } else {
       const openingHeight = THREE.MathUtils.clamp(opening.openingHeight, 0.2, height);
-      if (openingHeight < height) wallPiece(root, localX, width, openingHeight + (height - openingHeight) / 2, height - openingHeight);
+      if (openingHeight < height) wallPieceGeometry(root, geometries, localX, width, openingHeight + (height - openingHeight) / 2, height - openingHeight);
     }
   }
 
+  // As tampas fecham as pontas da parede e também ajudam no encaixe visual dos cantos.
   for (const x of [-info.length / 2, info.length / 2]) {
-    const cap = makeMesh(new THREE.BoxGeometry(thickness, height, thickness), root.userData.color || '#cfc6a2');
-    cap.position.set(x, height / 2, 0);
-    root.add(cap);
+    wallPieceGeometry(root, geometries, x, thickness, height / 2, height);
+  }
+
+  if (geometries.length) {
+    const merged = mergeGeometries(geometries, false);
+    geometries.forEach((geometry) => geometry.dispose());
+    if (merged) {
+      const wallMesh = makeMesh(merged, root.userData.color || '#cfc6a2');
+      wallMesh.name = 'wall-merged';
+      root.add(wallMesh);
+    }
   }
 
   root.userData.dimensions = { width: info.length, height, depth: thickness };
@@ -251,26 +264,34 @@ function createDoorVisual(root) {
   clearChildren(root);
   const { width, height, depth } = root.userData.dimensions;
   const frameColor = '#4b382d';
-  const frameThickness = 0.08;
-  const left = makeMesh(new THREE.BoxGeometry(frameThickness, height + 0.12, depth * 1.4), frameColor);
-  left.position.set(-width / 2, (height + 0.12) / 2, 0);
+  const frameThickness = Math.min(0.075, width * 0.08, height * 0.04);
+  const frameDepth = Math.max(0.08, depth);
+  const panelDepth = Math.min(Math.max(0.045, depth * 0.48), 0.08);
+
+  // O marco fica totalmente dentro do vão. Assim não sobra fresta lateral ou superior.
+  const left = makeMesh(new THREE.BoxGeometry(frameThickness, height, frameDepth), frameColor);
+  left.userData.keepColor = true;
+  left.position.set(-width / 2 + frameThickness / 2, height / 2, 0);
   root.add(left);
   const right = left.clone();
   right.material = left.material.clone();
-  right.position.x = width / 2;
+  right.position.x = width / 2 - frameThickness / 2;
   root.add(right);
-  const top = makeMesh(new THREE.BoxGeometry(width + frameThickness * 2, frameThickness, depth * 1.4), frameColor);
-  top.position.set(0, height + 0.06, 0);
+  const top = makeMesh(new THREE.BoxGeometry(Math.max(0.05, width - frameThickness * 2), frameThickness, frameDepth), frameColor);
+  top.userData.keepColor = true;
+  top.position.set(0, height - frameThickness / 2, 0);
   root.add(top);
 
+  const leafWidth = Math.max(0.08, width - frameThickness * 2);
+  const leafHeight = Math.max(0.08, height - frameThickness);
   const pivot = new THREE.Group();
-  pivot.position.set(-width / 2, 0, 0);
-  const panel = makeMesh(new THREE.BoxGeometry(width - 0.08, height - 0.08, depth), root.userData.color || '#80583a');
-  panel.position.set((width - 0.08) / 2, (height - 0.08) / 2, 0);
+  pivot.position.set(-width / 2 + frameThickness, 0, 0);
+  const panel = makeMesh(new THREE.BoxGeometry(leafWidth, leafHeight, panelDepth), root.userData.color || '#80583a');
+  panel.position.set(leafWidth / 2, leafHeight / 2, 0);
   pivot.add(panel);
   const knob = makeMesh(new THREE.SphereGeometry(0.04, 10, 8), '#d6bd69');
   knob.userData.keepColor = true;
-  knob.position.set(width - 0.18, height * 0.5, -depth * 0.8);
+  knob.position.set(Math.max(0.08, leafWidth - 0.15), leafHeight * 0.52, -panelDepth * 0.82);
   pivot.add(knob);
   root.add(pivot);
   root.userData.movingPart = pivot;
@@ -299,17 +320,17 @@ function createWindowVisual(root) {
   const frameThickness = Math.min(0.09, width * 0.09, height * 0.09);
   const frameColor = root.userData.color || '#54504a';
   const parts = [
-    [-width / 2, height / 2, frameThickness, height],
-    [width / 2, height / 2, frameThickness, height],
-    [0, 0, width, frameThickness],
-    [0, height, width, frameThickness],
+    [-width / 2 + frameThickness / 2, height / 2, frameThickness, height],
+    [width / 2 - frameThickness / 2, height / 2, frameThickness, height],
+    [0, frameThickness / 2, Math.max(0.05, width - frameThickness * 2), frameThickness],
+    [0, height - frameThickness / 2, Math.max(0.05, width - frameThickness * 2), frameThickness],
   ];
   for (const [x, y, w, h] of parts) {
     const part = makeMesh(new THREE.BoxGeometry(w, h, depth), frameColor);
     part.position.set(x, y, 0);
     root.add(part);
   }
-  const glass = makeMesh(new THREE.BoxGeometry(Math.max(0.05, width - frameThickness * 2), Math.max(0.05, height - frameThickness * 2), depth * 0.42), '#84c4df', {
+  const glass = makeMesh(new THREE.BoxGeometry(Math.max(0.05, width - frameThickness * 2), Math.max(0.05, height - frameThickness * 2), Math.min(depth * 0.42, 0.045)), '#84c4df', {
     transparent: true,
     opacity: 0.38,
     roughness: 0.08,
@@ -339,22 +360,23 @@ function createSlidingGateVisual(root) {
   clearChildren(root);
   const { width, height, depth } = root.userData.dimensions;
   const frameColor = '#3c4142';
-  const postWidth = 0.13;
-  for (const x of [-width / 2, width / 2]) {
-    const post = makeMesh(new THREE.BoxGeometry(postWidth, height + 0.2, depth * 1.4), frameColor, { metalness: 0.2 });
-    post.position.set(x, (height + 0.2) / 2, 0);
+  const postWidth = Math.min(0.13, width * 0.04);
+  for (const x of [-width / 2 + postWidth / 2, width / 2 - postWidth / 2]) {
+    const post = makeMesh(new THREE.BoxGeometry(postWidth, height, depth), frameColor, { metalness: 0.2 });
+    post.position.set(x, height / 2, 0);
     root.add(post);
   }
-  const rail = makeMesh(new THREE.BoxGeometry(width * 2.05, 0.06, depth * 1.5), frameColor, { metalness: 0.3 });
-  rail.position.set(width * 0.45, 0.05, 0);
+  const rail = makeMesh(new THREE.BoxGeometry(width * 2.05, 0.06, Math.max(depth, 0.08)), frameColor, { metalness: 0.3 });
+  rail.position.set(width * 0.45, 0.03, 0);
   root.add(rail);
 
   const sliding = new THREE.Group();
-  const panel = makeMesh(new THREE.BoxGeometry(width - 0.12, height - 0.14, depth), root.userData.color || '#59666b', { metalness: 0.25 });
+  const panelWidth = Math.max(0.2, width - postWidth * 2);
+  const panel = makeMesh(new THREE.BoxGeometry(panelWidth, height, Math.min(depth * 0.65, 0.09)), root.userData.color || '#59666b', { metalness: 0.25 });
   panel.position.y = height / 2;
   sliding.add(panel);
-  for (let x = -width / 2 + 0.25; x < width / 2; x += 0.35) {
-    const bar = makeMesh(new THREE.BoxGeometry(0.045, height - 0.22, depth * 1.35), '#303638', { metalness: 0.35 });
+  for (let x = -panelWidth / 2 + 0.2; x < panelWidth / 2; x += 0.35) {
+    const bar = makeMesh(new THREE.BoxGeometry(0.045, Math.max(0.2, height - 0.12), Math.max(depth, 0.08)), '#303638', { metalness: 0.35 });
     bar.userData.keepColor = true;
     bar.position.set(x, height / 2, 0);
     sliding.add(bar);
@@ -797,11 +819,33 @@ export function findFreeWallOffset(wall, world, desiredOffset, width, ignoreId =
   return null;
 }
 
+function refreshOpeningVisual(root) {
+  if (root.userData.kind === 'door') createDoorVisual(root);
+  else if (root.userData.kind === 'window') createWindowVisual(root);
+  else if (root.userData.kind === 'slidingGate') createSlidingGateVisual(root);
+}
+
+function fitOpeningToWall(root, wall) {
+  const wallHeight = Math.max(0.2, Number(wall.userData.segment?.height) || 3);
+  const wallDepth = Math.max(0.05, Number(wall.userData.segment?.thickness) || 0.16);
+  const dimensions = root.userData.dimensions || { width: 1, height: 2, depth: wallDepth };
+  const nextDepth = wallDepth;
+  let nextHeight = Math.min(Number(dimensions.height) || 2, wallHeight);
+  if (root.userData.kind === 'window') {
+    const sill = Math.max(0, Number(root.userData.sillHeight) || 0);
+    nextHeight = Math.max(0.15, Math.min(nextHeight, wallHeight - sill));
+  }
+  const changed = Math.abs((dimensions.depth || 0) - nextDepth) > 1e-4 || Math.abs((dimensions.height || 0) - nextHeight) > 1e-4;
+  root.userData.dimensions = { ...dimensions, depth: nextDepth, height: nextHeight };
+  if (changed) refreshOpeningVisual(root);
+}
+
 export function updateWallAttachments(wall, world) {
   const info = getSegmentInfo(wall);
   if (!info) return;
   for (const root of world.children) {
     if (!OPENING_KINDS.has(root.userData.kind) || root.userData.hostWallId !== wall.userData.objectId) continue;
+    fitOpeningToWall(root, wall);
     const width = Number(root.userData.dimensions?.width) || 1;
     const offset = THREE.MathUtils.clamp(Number(root.userData.hostOffset) || width / 2, width / 2, Math.max(width / 2, info.length - width / 2));
     root.userData.hostOffset = offset;
