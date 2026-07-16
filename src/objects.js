@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 export const OPENING_KINDS = new Set(['door', 'window', 'slidingGate']);
-export const NETWORK_KINDS = new Set(['computer', 'laptop', 'printer', 'network', 'switch', 'router', 'rack', 'server']);
+export const NETWORK_KINDS = new Set(['computer', 'laptop', 'printer', 'network', 'switch', 'router', 'rack', 'server', 'documentationTerminal']);
 export const SEGMENT_KINDS = new Set(['wall', 'glassWall', 'road', 'sidewalk']);
-export const COLLIDABLE_KINDS = new Set(['wall', 'glassWall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer', 'car', 'motorcycle']);
+export const COLLIDABLE_KINDS = new Set(['wall', 'glassWall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer', 'documentationTerminal', 'television', 'car', 'motorcycle']);
 
 export const OBJECT_LABELS = {
   wall: 'Parede',
@@ -29,6 +29,8 @@ export const OBJECT_LABELS = {
   router: 'Roteador',
   rack: 'Rack',
   server: 'Servidor',
+  documentationTerminal: 'Central de documentação',
+  television: 'Televisão',
   cable: 'Cabo de rede',
   stairs: 'Escada',
   spawnPoint: 'Ponto inicial do avatar',
@@ -56,8 +58,17 @@ export function defaultMeta(kind) {
   const counters = {
     computer: 'PC-01', laptop: 'NOTE-01', printer: 'IMP-01', network: 'PTR-01',
     switch: 'SW-01', router: 'RTR-01', rack: 'RACK-01', server: 'SRV-01',
+    documentationTerminal: 'DOC-01', television: 'TV-01',
   };
   if (counters[kind]) base.name = counters[kind];
+  if (kind === 'documentationTerminal') {
+    base.documents = [];
+    base.presentationTitle = 'Documentação do projeto';
+  }
+  if (kind === 'television') {
+    base.screenTitle = 'EMPRESA 3D';
+    base.screenSubtitle = 'Apresentação do projeto';
+  }
   return base;
 }
 
@@ -759,6 +770,109 @@ function createRack(position, options = {}, kind = 'rack') {
   return root;
 }
 
+function createDocumentationTerminal(position, options = {}) {
+  const root = setupRoot(new THREE.Group(), 'documentationTerminal', { ...options, color: options.color || '#39464c' });
+  root.userData.dimensions = {
+    width: Number(options.width) || 0.92,
+    height: Number(options.height) || 1.48,
+    depth: Number(options.depth) || 0.58,
+  };
+
+  const pedestal = makeMesh(new THREE.BoxGeometry(0.72, 0.84, 0.46), root.userData.color, { metalness: 0.18 });
+  pedestal.position.y = 0.42;
+  root.add(pedestal);
+
+  const neck = makeMesh(new THREE.BoxGeometry(0.16, 0.28, 0.14), '#252d31', { metalness: 0.28 });
+  neck.userData.keepColor = true;
+  neck.position.y = 0.98;
+  root.add(neck);
+
+  const monitorFrame = makeMesh(new THREE.BoxGeometry(0.92, 0.62, 0.09), '#20282c', { metalness: 0.3 });
+  monitorFrame.userData.keepColor = true;
+  monitorFrame.position.set(0, 1.25, -0.03);
+  monitorFrame.rotation.x = -0.08;
+  root.add(monitorFrame);
+
+  const screen = makeMesh(new THREE.BoxGeometry(0.82, 0.5, 0.015), '#3b9fd4', {
+    roughness: 0.16,
+    metalness: 0.02,
+    castShadow: false,
+    receiveShadow: false,
+  });
+  screen.userData.keepColor = true;
+  screen.position.set(0, 1.25, -0.083);
+  screen.rotation.x = -0.08;
+  root.add(screen);
+
+  const documentIcon = makeMesh(new THREE.BoxGeometry(0.25, 0.32, 0.012), '#f5f3dc', { castShadow: false, receiveShadow: false });
+  documentIcon.userData.keepColor = true;
+  documentIcon.position.set(-0.1, 1.25, -0.096);
+  documentIcon.rotation.x = -0.08;
+  root.add(documentIcon);
+  for (let index = 0; index < 3; index += 1) {
+    const line = makeMesh(new THREE.BoxGeometry(0.13, 0.018, 0.008), '#5d7180', { castShadow: false, receiveShadow: false });
+    line.userData.keepColor = true;
+    line.position.set(-0.1, 1.31 - index * 0.07, -0.105);
+    line.rotation.x = -0.08;
+    root.add(line);
+  }
+
+  const keyboard = makeMesh(new THREE.BoxGeometry(0.58, 0.05, 0.24), '#d9ddd8', { metalness: 0.05 });
+  keyboard.userData.keepColor = true;
+  keyboard.position.set(0, 0.91, -0.25);
+  keyboard.rotation.x = -0.14;
+  root.add(keyboard);
+
+  root.position.copy(position);
+  markRoot(root);
+  return root;
+}
+
+function createTelevision(position, options = {}) {
+  const root = setupRoot(new THREE.Group(), 'television', { ...options, color: options.color || '#202427' });
+  root.userData.dimensions = {
+    width: Number(options.width) || 1.9,
+    height: Number(options.height) || 1.35,
+    depth: Number(options.depth) || 0.42,
+  };
+
+  const frame = makeMesh(new THREE.BoxGeometry(1.9, 1.08, 0.12), root.userData.color, { metalness: 0.28, roughness: 0.38 });
+  frame.position.y = 1.16;
+  root.add(frame);
+
+  const screen = makeMesh(new THREE.BoxGeometry(1.72, 0.9, 0.018), '#173c55', {
+    roughness: 0.12,
+    metalness: 0.03,
+    castShadow: false,
+    receiveShadow: false,
+  });
+  screen.userData.keepColor = true;
+  screen.position.set(0, 1.16, -0.071);
+  root.add(screen);
+
+  const glow = makeMesh(new THREE.BoxGeometry(1.12, 0.12, 0.008), '#79d7f2', { castShadow: false, receiveShadow: false });
+  glow.userData.keepColor = true;
+  glow.position.set(0, 1.2, -0.083);
+  root.add(glow);
+  const glow2 = makeMesh(new THREE.BoxGeometry(0.72, 0.055, 0.008), '#dbeef5', { castShadow: false, receiveShadow: false });
+  glow2.userData.keepColor = true;
+  glow2.position.set(0, 1.02, -0.083);
+  root.add(glow2);
+
+  const stand = makeMesh(new THREE.BoxGeometry(0.16, 0.42, 0.15), '#30383c', { metalness: 0.35 });
+  stand.userData.keepColor = true;
+  stand.position.y = 0.42;
+  root.add(stand);
+  const base = makeMesh(new THREE.BoxGeometry(0.72, 0.07, 0.38), '#30383c', { metalness: 0.35 });
+  base.userData.keepColor = true;
+  base.position.y = 0.18;
+  root.add(base);
+
+  root.position.copy(position);
+  markRoot(root);
+  return root;
+}
+
 function createSwitch(position, options = {}) {
   const root = setupRoot(new THREE.Group(), 'switch', { ...options, color: options.color || '#263a42' });
   root.userData.dimensions = { width: Number(options.width) || 0.78, height: Number(options.height) || 0.22, depth: Number(options.depth) || 0.38 };
@@ -1019,6 +1133,8 @@ export function createObject(kind, position = new THREE.Vector3(), options = {})
   if (kind === 'router') return createRouter(position, options);
   if (kind === 'rack') return createRack(position, options, 'rack');
   if (kind === 'server') return createRack(position, options, 'server');
+  if (kind === 'documentationTerminal') return createDocumentationTerminal(position, options);
+  if (kind === 'television') return createTelevision(position, options);
   if (kind === 'stairs') return createStairs(position, options);
   if (kind === 'spawnPoint') return createSpawnPoint(position, options);
   if (kind === 'car') return createCar(position, options);
@@ -1321,7 +1437,7 @@ export function serializeObject(root) {
   const data = {
     id: root.userData.objectId,
     kind,
-    meta: root.userData.meta || defaultMeta(kind),
+    meta: structuredClone(root.userData.meta || defaultMeta(kind)),
     color: getFirstColor(root),
     locked: Boolean(root.userData.locked),
     hidden: Boolean(root.userData.hidden),

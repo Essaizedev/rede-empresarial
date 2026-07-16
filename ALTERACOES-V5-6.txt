@@ -1,0 +1,24 @@
+ALTERAÇÕES V5.6 — DOCUMENTAÇÃO DENTRO DO SIMULADOR
+
+1. Central de documentação
+- Novo objeto na aba Rede: Central de documentos.
+- A biblioteca fica armazenada dentro do próprio objeto e acompanha o projeto exportado, salvo e publicado.
+- Permite cadastrar PDFs, sites, vídeos e textos.
+- Links do Google Drive, Google Docs/Slides/Sheets e YouTube são adaptados para visualização interna.
+- Durante a simulação, aproxime-se e pressione E para abrir a biblioteca.
+- O visualizador abre dentro do simulador, com lista, categorias, prévia e botão para nova aba.
+- A documentação é editada no painel de propriedades do objeto.
+
+2. Televisão
+- Nova aba Decoração.
+- Novo objeto Televisão, redimensionável, movível, girável e colorível.
+- Modelo leve para não aumentar significativamente o custo de renderização.
+
+3. Segurança e compatibilidade
+- Apenas URLs http/https são aceitas.
+- Conteúdo de texto é exibido como texto simples, sem executar HTML.
+- Projetos antigos continuam funcionando.
+- Não exige alteração no Supabase nem novo SQL.
+
+OBSERVAÇÃO
+Para que todos os participantes de uma sala vejam os documentos, os links precisam estar públicos ou compartilhados para visualização. Arquivos locais do computador não podem ser acessados por outros navegadores.

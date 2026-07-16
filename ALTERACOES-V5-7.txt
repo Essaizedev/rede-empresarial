@@ -1,0 +1,12 @@
+CORREÇÕES V5.7 — VEÍCULOS E PORTÃO
+
+- O avatar não desaparece mais ao entrar na moto ou no carro.
+- Outros jogadores veem o motorista sentado e acompanhando o veículo.
+- A visão em primeira pessoa mantém parte do corpo visível na moto.
+- Portas e portões agora têm colisão física com carros e motos.
+- O movimento dos veículos usa subpassos para não atravessar portões finos em alta velocidade ou FPS baixo.
+- A saída do carro/moto procura automaticamente um local livre ao redor do veículo.
+- Ao sair, altura, câmera, teclas, colisão, HUD e estado online são restaurados.
+- O estado do jogador é enviado imediatamente ao entrar e sair do veículo.
+
+Atualização rápida: substitua src/main.js e src/avatar.js.

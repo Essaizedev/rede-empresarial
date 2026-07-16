@@ -91,3 +91,12 @@ O arquivo `vercel.json` já fixa o build correto.
 - E ou clique: interagir;
 - 1: acenar;
 - 2: apontar.
+
+
+## Central de documentação (V5.6)
+
+Na aba **Rede**, adicione a **Central de documentos**. Selecione o objeto no construtor e use o painel **Biblioteca de documentos** para cadastrar PDFs, links, vídeos e textos. Durante a simulação, aproxime-se da central e pressione **E**.
+
+Para uso online, os documentos precisam estar em URLs públicas ou compartilhadas. Links do Google Drive e YouTube são convertidos automaticamente para visualização no simulador.
+
+A aba **Decoração** também contém uma televisão leve e redimensionável.

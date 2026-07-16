@@ -481,6 +481,20 @@ export function applyAvatarState(root, player = {}) {
 export function updateAvatar(root, delta, elapsed) {
   if (!root?.userData?.rig) return;
   const rig = root.userData.rig;
+  const vehicleKind = root.userData.vehicleKind || '';
+
+  if (vehicleKind) {
+    const motorcycle = vehicleKind === 'motorcycle';
+    root.userData.walkPhase += delta * 2;
+    rig.hips.position.y = 0.92;
+    rig.torso.rotation.set(0, 0, 0);
+    rig.leftLeg.rotation.set(motorcycle ? 0.55 : 1.12, 0, motorcycle ? -0.10 : -0.04);
+    rig.rightLeg.rotation.set(motorcycle ? 0.55 : 1.12, 0, motorcycle ? 0.10 : 0.04);
+    rig.leftArm.rotation.set(motorcycle ? 1.18 : 1.02, 0, motorcycle ? -0.34 : -0.20);
+    rig.rightArm.rotation.set(motorcycle ? 1.18 : 1.02, 0, motorcycle ? 0.34 : 0.20);
+    return;
+  }
+
   const moving = Boolean(root.userData.moving);
   const speed = moving ? 9 : 3;
   root.userData.walkPhase += delta * speed;

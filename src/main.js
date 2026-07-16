@@ -196,6 +196,7 @@ app.innerHTML = `
         <button data-tab="exterior">Exterior</button>
         <button data-tab="furniture">Móveis</button>
         <button data-tab="network">Rede</button>
+        <button data-tab="decoration">Decoração</button>
       </div>
 
       <div class="tool-section active" data-section="structure">
@@ -241,7 +242,13 @@ app.innerHTML = `
           <button data-add="router">Roteador</button>
           <button data-add="rack">Rack</button>
           <button data-add="server">Servidor</button>
+          <button data-add="documentationTerminal">Central de documentos</button>
           <button data-tool="cable">Cabo</button>
+        </div>
+      </div>
+      <div class="tool-section" data-section="decoration">
+        <div class="tool-grid">
+          <button data-add="television">Televisão</button>
         </div>
       </div>
 
@@ -394,6 +401,23 @@ app.innerHTML = `
           <button id="reattachOpening" class="secondary wide">Reencaixar na parede mais próxima</button>
         </details>
 
+        <details id="documentationProperties">
+          <summary>Biblioteca de documentos</summary>
+          <p class="help-text">Adicione PDFs, links, vídeos ou textos. Para a sala online, use links públicos ou compartilhados. Links do Google Drive e YouTube são adaptados automaticamente.</p>
+          <div class="field"><label>Título<input id="docTitle" maxlength="90" placeholder="Ex.: Memorial descritivo" /></label></div>
+          <div class="field-row">
+            <label>Categoria<input id="docCategory" maxlength="50" placeholder="Ex.: Projeto" /></label>
+            <label>Tipo<select id="docType"><option value="pdf">PDF</option><option value="link">Site/Link</option><option value="video">Vídeo</option><option value="text">Texto</option></select></label>
+          </div>
+          <div id="docUrlField" class="field"><label>URL pública<input id="docUrl" placeholder="https://..." /></label></div>
+          <div id="docTextField" class="field hidden"><label>Conteúdo<textarea id="docText" rows="7" placeholder="Cole aqui o texto da documentação"></textarea></label></div>
+          <div class="document-editor-actions">
+            <button id="saveDocumentEntry" type="button" class="primary">Adicionar</button>
+            <button id="cancelDocumentEdit" type="button" class="secondary hidden">Cancelar edição</button>
+          </div>
+          <div id="documentListEditor" class="document-list-editor"></div>
+        </details>
+
         <button id="applyProperties" class="primary wide">Aplicar alterações</button>
       </div>
 
@@ -441,6 +465,27 @@ app.innerHTML = `
       <button id="closeModal" class="secondary wide">Fechar</button>
     </div>
   </section>
+
+  <section id="documentationModal">
+    <div class="documentation-shell">
+      <header class="documentation-header">
+        <div><span class="eyebrow">CENTRAL DE DOCUMENTAÇÃO</span><h2 id="documentationModalTitle">Documentação do projeto</h2></div>
+        <button id="closeDocumentation" class="secondary">Fechar</button>
+      </header>
+      <div class="documentation-layout">
+        <aside id="documentationList" class="documentation-list"></aside>
+        <main class="documentation-preview-panel">
+          <div class="documentation-preview-heading">
+            <div><span id="documentationCategory"></span><h3 id="documentationTitle">Selecione um documento</h3></div>
+            <a id="documentationExternal" class="documentation-external hidden" target="_blank" rel="noopener noreferrer">Abrir em nova aba</a>
+          </div>
+          <div id="documentationPreview" class="documentation-preview">
+            <div class="documentation-empty">Selecione um documento à esquerda.</div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
 `;
 
 const $ = (selector) => document.querySelector(selector);
@@ -462,6 +507,9 @@ const vehicleSpeed = $('#vehicleSpeed');
 const joinButton = $('#joinRoomButton');
 const publishButton = $('#publishScene');
 const deleteRoomButton = $('#deleteRoom');
+const documentationModal = $('#documentationModal');
+const documentationList = $('#documentationList');
+const documentationPreview = $('#documentationPreview');
 
 const avatarInputs = {
   bodyType: $('#avatarBodyType'),
@@ -807,13 +855,16 @@ function updateFirstPersonBody(delta, moving) {
   rig.leftArm.rotation.set(0, 0, moving && !activeVehicle ? Math.sin(elapsed * 10) * 0.06 : 0.04);
   rig.rightArm.rotation.set(0, 0, moving && !activeVehicle ? -Math.sin(elapsed * 10) * 0.06 : 0.04);
   if (activeVehicle) {
-    rig.torso.visible = false;
+    const onMotorcycle = activeVehicle.userData.kind === 'motorcycle';
+    rig.torso.visible = onMotorcycle;
+    rig.torso.position.set(0, onMotorcycle ? -0.70 : -0.74, onMotorcycle ? -0.52 : -0.48);
     rig.leftArm.position.set(-0.25, -0.32, -0.76);
     rig.rightArm.position.set(0.25, -0.32, -0.76);
     rig.leftArm.rotation.x = -1.05;
     rig.rightArm.rotation.x = -1.05;
   } else {
     rig.torso.visible = true;
+    rig.torso.position.set(0, -0.74, -0.48);
     rig.leftArm.position.set(-0.36, -0.30, -0.57);
     rig.rightArm.position.set(0.36, -0.30, -0.57);
     rig.leftArm.rotation.x = 0;
@@ -879,6 +930,9 @@ let lastRenderedAt = 0;
 let activeVehicle = null;
 let firstPersonGesture = '';
 let firstPersonGestureUntil = 0;
+let documentationEditId = '';
+let activeDocumentationRoot = null;
+let activeDocumentationId = '';
 let worldSource = 'personal';
 let personalProjectInitialized = false;
 let personalAutosaveTimer = null;
@@ -922,7 +976,7 @@ const QUALITY_PROFILES = {
   high: { pixelRatio: 1.5, shadowSize: 2048, renderInterval: 0, fogFar: 190 },
 };
 
-const SHADOW_KINDS = new Set(['wall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'rack', 'server', 'stairs']);
+const SHADOW_KINDS = new Set(['wall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'rack', 'server', 'documentationTerminal', 'television', 'stairs']);
 function shadowEligible(root) {
   return SHADOW_KINDS.has(root?.userData?.kind);
 }
@@ -1235,6 +1289,182 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 }
 
+function normalizeDocumentationEntry(entry = {}) {
+  const type = ['pdf', 'link', 'video', 'text'].includes(entry.type) ? entry.type : 'pdf';
+  return {
+    id: String(entry.id || crypto.randomUUID()),
+    title: String(entry.title || 'Documento').trim().slice(0, 90),
+    category: String(entry.category || '').trim().slice(0, 50),
+    type,
+    url: String(entry.url || '').trim().slice(0, 2000),
+    text: String(entry.text || '').trim().slice(0, 120000),
+  };
+}
+
+function documentationEntries(root = selected) {
+  if (!root || root.userData.kind !== 'documentationTerminal') return [];
+  root.userData.meta ||= {};
+  if (!Array.isArray(root.userData.meta.documents)) root.userData.meta.documents = [];
+  root.userData.meta.documents = root.userData.meta.documents.map(normalizeDocumentationEntry);
+  return root.userData.meta.documents;
+}
+
+function documentTypeLabel(type) {
+  return ({ pdf: 'PDF', link: 'Link', video: 'Vídeo', text: 'Texto' })[type] || 'Documento';
+}
+
+function resetDocumentEditor() {
+  documentationEditId = '';
+  const fields = ['#docTitle', '#docCategory', '#docUrl', '#docText'];
+  for (const selector of fields) {
+    const input = $(selector);
+    if (input) input.value = '';
+  }
+  if ($('#docType')) $('#docType').value = 'pdf';
+  $('#saveDocumentEntry')?.replaceChildren(document.createTextNode('Adicionar'));
+  $('#cancelDocumentEdit')?.classList.add('hidden');
+  syncDocumentTypeFields();
+}
+
+function syncDocumentTypeFields() {
+  const isText = $('#docType')?.value === 'text';
+  $('#docUrlField')?.classList.toggle('hidden', isText);
+  $('#docTextField')?.classList.toggle('hidden', !isText);
+}
+
+function renderDocumentationEditor() {
+  const target = $('#documentListEditor');
+  if (!target || !selected || selected.userData.kind !== 'documentationTerminal') return;
+  const documents = documentationEntries(selected);
+  target.innerHTML = documents.length
+    ? documents.map((item, index) => `
+      <div class="document-editor-row" data-document-id="${escapeHtml(item.id)}">
+        <div><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.category || documentTypeLabel(item.type))}</span></div>
+        <div class="document-editor-buttons">
+          <button type="button" data-doc-up="${escapeHtml(item.id)}" title="Mover para cima" ${index === 0 ? 'disabled' : ''}>↑</button>
+          <button type="button" data-doc-edit="${escapeHtml(item.id)}">Editar</button>
+          <button type="button" data-doc-delete="${escapeHtml(item.id)}" class="delete">Excluir</button>
+        </div>
+      </div>`).join('')
+    : '<div class="documentation-editor-empty">Nenhum documento adicionado.</div>';
+}
+
+function publicDocumentUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    if (!['http:', 'https:'].includes(url.protocol)) return '';
+    return url.href;
+  } catch {
+    return '';
+  }
+}
+
+function previewDocumentUrl(entry) {
+  const raw = publicDocumentUrl(entry?.url);
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    if (url.hostname === 'drive.google.com') {
+      const fileMatch = url.pathname.match(/\/file\/d\/([^/]+)/);
+      if (fileMatch) return `https://drive.google.com/file/d/${fileMatch[1]}/preview`;
+    }
+    if (url.hostname.endsWith('docs.google.com')) {
+      const match = url.pathname.match(/\/(document|presentation|spreadsheets)\/d\/([^/]+)/);
+      if (match) return `https://docs.google.com/${match[1]}/d/${match[2]}/preview`;
+    }
+    if (url.hostname === 'youtu.be') return `https://www.youtube.com/embed/${url.pathname.replace('/', '')}`;
+    if (url.hostname.includes('youtube.com')) {
+      const id = url.searchParams.get('v');
+      if (id) return `https://www.youtube.com/embed/${id}`;
+      const embedMatch = url.pathname.match(/\/embed\/([^/]+)/);
+      if (embedMatch) return `https://www.youtube.com/embed/${embedMatch[1]}`;
+    }
+    return raw;
+  } catch {
+    return raw;
+  }
+}
+
+function renderDocumentationModalList() {
+  if (!activeDocumentationRoot) return;
+  const documents = documentationEntries(activeDocumentationRoot);
+  documentationList.innerHTML = documents.length
+    ? documents.map((item) => `<button type="button" class="documentation-list-item ${item.id === activeDocumentationId ? 'active' : ''}" data-view-document="${escapeHtml(item.id)}"><span>${escapeHtml(item.category || documentTypeLabel(item.type))}</span><strong>${escapeHtml(item.title)}</strong></button>`).join('')
+    : '<div class="documentation-empty-list">Esta central ainda não possui documentos.</div>';
+}
+
+function showDocumentationEntry(id) {
+  if (!activeDocumentationRoot) return;
+  const entry = documentationEntries(activeDocumentationRoot).find((item) => item.id === id);
+  if (!entry) return;
+  activeDocumentationId = entry.id;
+  renderDocumentationModalList();
+  $('#documentationTitle').textContent = entry.title;
+  $('#documentationCategory').textContent = entry.category || documentTypeLabel(entry.type);
+  const external = $('#documentationExternal');
+  const url = publicDocumentUrl(entry.url);
+  external.classList.toggle('hidden', !url || entry.type === 'text');
+  if (url) external.href = url;
+  else external.removeAttribute('href');
+  documentationPreview.replaceChildren();
+
+  if (entry.type === 'text') {
+    const article = document.createElement('article');
+    article.className = 'document-text-preview';
+    article.textContent = entry.text || 'Este documento de texto está vazio.';
+    documentationPreview.appendChild(article);
+    return;
+  }
+
+  const previewUrl = previewDocumentUrl(entry);
+  if (!previewUrl) {
+    const empty = document.createElement('div');
+    empty.className = 'documentation-empty';
+    empty.textContent = 'A URL deste documento não é válida.';
+    documentationPreview.appendChild(empty);
+    return;
+  }
+  const iframe = document.createElement('iframe');
+  iframe.src = previewUrl;
+  iframe.title = entry.title;
+  iframe.loading = 'eager';
+  iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+  iframe.allow = 'autoplay; fullscreen; picture-in-picture';
+  iframe.allowFullscreen = true;
+  documentationPreview.appendChild(iframe);
+  const note = document.createElement('div');
+  note.className = 'documentation-frame-note';
+  note.textContent = 'Alguns sites impedem visualização incorporada. Nesse caso, use “Abrir em nova aba”.';
+  documentationPreview.appendChild(note);
+}
+
+function openDocumentation(root) {
+  activeDocumentationRoot = root;
+  const documents = documentationEntries(root);
+  activeDocumentationId = documents[0]?.id || '';
+  $('#documentationModalTitle').textContent = root.userData.meta?.name || root.userData.meta?.presentationTitle || 'Documentação do projeto';
+  documentationModal.classList.add('open');
+  document.exitPointerLock?.();
+  renderDocumentationModalList();
+  if (activeDocumentationId) showDocumentationEntry(activeDocumentationId);
+  else {
+    $('#documentationTitle').textContent = 'Nenhum documento cadastrado';
+    $('#documentationCategory').textContent = '';
+    $('#documentationExternal').classList.add('hidden');
+    documentationPreview.innerHTML = '<div class="documentation-empty">Abra o construtor, selecione a Central de documentação e adicione os arquivos ou links.</div>';
+  }
+}
+
+function closeDocumentationViewer() {
+  documentationModal.classList.remove('open');
+  documentationPreview.replaceChildren();
+  activeDocumentationRoot = null;
+  activeDocumentationId = '';
+  if (appMode === 'game') setPointerLockHint(true, 'Clique na tela para continuar');
+}
+
 function getObjectDimensions(root) {
   if (root?.userData?.dimensions) return root.userData.dimensions;
   const box = new THREE.Box3().setFromObject(root);
@@ -1276,8 +1506,11 @@ function syncPropertiesForm() {
 
   $('#networkProperties').classList.toggle('hidden', !NETWORK_KINDS.has(selected.userData.kind));
   $('#openingProperties').classList.toggle('hidden', !OPENING_KINDS.has(selected.userData.kind));
+  $('#documentationProperties').classList.toggle('hidden', selected.userData.kind !== 'documentationTerminal' || count !== 1);
   $('#propSill').closest('.field').classList.toggle('hidden', selected.userData.kind !== 'window');
   $('#propSlideDirection').closest('.field').classList.toggle('hidden', selected.userData.kind !== 'slidingGate');
+  if (selected.userData.kind === 'documentationTerminal' && count === 1) renderDocumentationEditor();
+  else resetDocumentEditor();
   updateSwitchPorts(selected);
 }
 
@@ -2095,7 +2328,7 @@ function setPointerLockHint(visible, message = 'Clique na tela para controlar o 
 
 async function requestGamePointerLock() {
   if (appMode !== 'game' || pointerControls.isLocked || pointerLockPending) return false;
-  if ($('#equipmentModal')?.classList.contains('open')) return false;
+  if ($('#equipmentModal')?.classList.contains('open') || documentationModal?.classList.contains('open')) return false;
 
   pointerLockPending = true;
   try {
@@ -2125,6 +2358,7 @@ function leaveGame() {
   document.body.classList.remove('game-keyboard-captured');
   if (document.pointerLockElement) document.exitPointerLock?.();
   $('#equipmentModal').classList.remove('open');
+  documentationModal.classList.remove('open');
   if (activeVehicle) exitVehicle();
   firstPersonBody.visible = false;
   vehicleHud.classList.add('hidden');
@@ -2236,7 +2470,8 @@ function upsertRemote(player) {
   avatar.userData.lastNetworkAt = now;
   const transitSeconds = Math.min(0.3, Math.max(0, (Date.now() - (Number(player.sentAt) || Date.now())) / 1000));
   avatar.userData.targetPosition.addScaledVector(velocity, transitSeconds);
-  avatar.visible = !player.inVehicle;
+  avatar.userData.inVehicle = String(player.inVehicle || '');
+  avatar.visible = true;
   if (listChanged) updatePlayersList();
 }
 
@@ -2347,10 +2582,25 @@ function applyVehicleState(payload) {
   if (!payload?.objectId) return;
   const vehicle = world.children.find((root) => root.userData.objectId === payload.objectId && ['car', 'motorcycle'].includes(root.userData.kind));
   if (!vehicle || vehicle === activeVehicle) return;
-  vehicle.position.set(Number(payload.x) || 0, 0, Number(payload.z) || 0);
+  vehicle.position.set(Number(payload.x) || 0, vehicle.position.y || 0, Number(payload.z) || 0);
   vehicle.rotation.y = Number(payload.ry) || 0;
   vehicle.userData.speed = Number(payload.speed) || 0;
-  vehicle.userData.driverId = payload.driverId || '';
+
+  const previousDriverId = vehicle.userData.driverId || '';
+  const nextDriverId = payload.driverId || '';
+  vehicle.userData.driverId = nextDriverId;
+
+  if (previousDriverId && previousDriverId !== nextDriverId) {
+    const previousAvatar = remotePlayers.get(previousDriverId);
+    if (previousAvatar?.userData.inVehicle === vehicle.userData.objectId) {
+      previousAvatar.userData.inVehicle = '';
+      previousAvatar.userData.vehicleKind = '';
+    }
+  }
+  if (nextDriverId) {
+    const driverAvatar = remotePlayers.get(nextDriverId);
+    if (driverAvatar) driverAvatar.userData.inVehicle = vehicle.userData.objectId;
+  }
 }
 
 function vehicleCollisionAt(vehicle, position) {
@@ -2361,6 +2611,17 @@ function vehicleCollisionAt(vehicle, position) {
   vehicle.position.copy(original);
   vehicle.updateMatrixWorld(true);
   for (const staticBox of staticCollisionBoxes) if (staticBox.intersectsBox(box)) return true;
+
+  // Portas e portões são finos. A colisão usa a folha/painel na posição
+  // animada atual, inclusive enquanto estão abrindo ou fechando.
+  for (const opening of dynamicCollisionRoots) {
+    const movingPart = opening.userData.movingPart;
+    if (!movingPart) continue;
+    opening.updateMatrixWorld(true);
+    const openingBox = new THREE.Box3().setFromObject(movingPart).expandByScalar(-0.01);
+    if (openingBox.intersectsBox(box)) return true;
+  }
+
   for (const other of world.children) {
     if (other === vehicle || !['car', 'motorcycle'].includes(other.userData.kind)) continue;
     if (new THREE.Box3().setFromObject(other).intersectsBox(box)) return true;
@@ -2377,7 +2638,20 @@ function enterVehicle(vehicle) {
   activeVehicle = vehicle;
   vehicle.userData.driverId = localPlayer?.id || 'solo';
   vehicle.userData.speed = Number(vehicle.userData.speed) || 0;
-  if (localPlayer) localPlayer = { ...localPlayer, inVehicle: vehicle.userData.objectId };
+  if (localPlayer) {
+    localPlayer = {
+      ...localPlayer,
+      x: vehicle.position.x,
+      y: vehicle.position.y || 0,
+      z: vehicle.position.z,
+      ry: vehicle.rotation.y,
+      moving: false,
+      inVehicle: vehicle.userData.objectId,
+      vx: 0,
+      vz: 0,
+      sentAt: Date.now(),
+    };
+  }
   vehicleName.textContent = objectLabel(vehicle.userData.kind);
   vehicleHud.classList.remove('hidden');
   const seat = new THREE.Vector3(0, vehicle.userData.kind === 'motorcycle' ? 1.43 : 1.25, vehicle.userData.kind === 'motorcycle' ? 0.10 : -0.18);
@@ -2388,26 +2662,84 @@ function enterVehicle(vehicle) {
     objectId: vehicle.userData.objectId, x: vehicle.position.x, z: vehicle.position.z,
     ry: vehicle.rotation.y, speed: vehicle.userData.speed, driverId: vehicle.userData.driverId,
   }).catch(() => {});
+  if (localPlayer) broadcast('player_move', localPlayer).catch(() => {});
+  lastMovementSignature = '';
+  lastMoveSent = 0;
   showToast(`Você entrou no ${objectLabel(vehicle.userData.kind).toLowerCase()}.`);
+}
+
+function findSafeVehicleExit(vehicle) {
+  const dimensions = vehicle.userData.dimensions || {};
+  const width = Math.max(0.7, Number(dimensions.width) || (vehicle.userData.kind === 'motorcycle' ? 0.78 : 1.82));
+  const depth = Math.max(1.5, Number(dimensions.depth) || (vehicle.userData.kind === 'motorcycle' ? 2.25 : 4.15));
+  const sideDistance = width / 2 + 0.92;
+  const endDistance = depth / 2 + 0.92;
+  const candidates = [
+    [sideDistance, 0],
+    [-sideDistance, 0],
+    [0, endDistance],
+    [0, -endDistance],
+    [sideDistance, depth * 0.24],
+    [-sideDistance, depth * 0.24],
+    [sideDistance, -depth * 0.24],
+    [-sideDistance, -depth * 0.24],
+  ];
+
+  for (const [localX, localZ] of candidates) {
+    const candidate = new THREE.Vector3(localX, 0, localZ);
+    vehicle.localToWorld(candidate);
+    const ground = groundHeightAt(candidate, currentGroundHeight);
+    candidate.y = ground + 1.7;
+    // null significa que nem o veículo recém-abandonado será ignorado.
+    if (!collides(candidate, null)) return { position: candidate, ground };
+  }
+
+  const spawn = getSpawnTransform();
+  const fallback = new THREE.Vector3(spawn.x, (spawn.y || 0) + 1.7, spawn.z);
+  return { position: fallback, ground: spawn.y || 0 };
 }
 
 function exitVehicle() {
   if (!activeVehicle) return;
   const vehicle = activeVehicle;
-  const side = new THREE.Vector3(vehicle.userData.kind === 'motorcycle' ? 1.0 : 1.35, 0, 0).applyQuaternion(vehicle.quaternion);
-  let exitPosition = vehicle.position.clone().add(side);
-  exitPosition.y = 1.7;
-  if (collides(exitPosition)) exitPosition = vehicle.position.clone().sub(side).setY(1.7);
-  gameCamera.position.copy(exitPosition);
+  const safeExit = findSafeVehicleExit(vehicle);
+
   vehicle.userData.driverId = '';
   vehicle.userData.speed = 0;
-  if (localPlayer) localPlayer = { ...localPlayer, inVehicle: '' };
+  activeVehicle = null;
+  keys.clear();
+  interactionRoot = null;
+
+  currentGroundHeight = safeExit.ground;
+  gameCamera.position.copy(safeExit.position);
+  gameCamera.rotation.set(0, vehicle.rotation.y, 0);
+
+  if (localPlayer) {
+    localPlayer = {
+      ...localPlayer,
+      x: gameCamera.position.x,
+      y: currentGroundHeight,
+      z: gameCamera.position.z,
+      ry: vehicle.rotation.y,
+      moving: false,
+      inVehicle: '',
+      vx: 0,
+      vz: 0,
+      sentAt: Date.now(),
+    };
+  }
+
   broadcast('vehicle_state', {
     objectId: vehicle.userData.objectId, x: vehicle.position.x, z: vehicle.position.z,
     ry: vehicle.rotation.y, speed: 0, driverId: '',
   }).catch(() => {});
-  activeVehicle = null;
+  if (localPlayer) broadcast('player_move', localPlayer).catch(() => {});
+
+  lastMovementSignature = '';
+  lastMoveSent = 0;
   vehicleHud.classList.add('hidden');
+  renderer.domElement.focus({ preventScroll: true });
+  setPointerLockHint(!pointerControls.isLocked, 'Clique na tela para continuar');
   showToast('Você saiu do veículo.');
 }
 
@@ -2425,9 +2757,18 @@ function updateDrivenVehicle(delta) {
   const steerStrength = config.steerRate * Math.min(1, Math.abs(speed) / 3.2);
   activeVehicle.rotation.y += steering * steerStrength * delta * (speed >= 0 ? 1 : -1);
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(activeVehicle.quaternion);
-  const next = activeVehicle.position.clone().addScaledVector(forward, speed * delta);
-  if (!vehicleCollisionAt(activeVehicle, next)) activeVehicle.position.copy(next);
-  else speed = 0;
+  const travel = speed * delta;
+  // Subpassos evitam atravessar portões finos quando o FPS cai ou o veículo está rápido.
+  const steps = Math.max(1, Math.ceil(Math.abs(travel) / 0.16));
+  const stepDistance = travel / steps;
+  for (let index = 0; index < steps; index += 1) {
+    const next = activeVehicle.position.clone().addScaledVector(forward, stepDistance);
+    if (vehicleCollisionAt(activeVehicle, next)) {
+      speed = 0;
+      break;
+    }
+    activeVehicle.position.copy(next);
+  }
   activeVehicle.userData.speed = speed;
   const seat = new THREE.Vector3(0, activeVehicle.userData.kind === 'motorcycle' ? 1.43 : 1.25, activeVehicle.userData.kind === 'motorcycle' ? 0.10 : -0.18);
   activeVehicle.localToWorld(seat);
@@ -2710,7 +3051,7 @@ function rebuildGameCaches() {
   walkableRoots = [];
   world.updateMatrixWorld(true);
 
-  const staticKinds = new Set(['table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer']);
+  const staticKinds = new Set(['table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer', 'documentationTerminal', 'television']);
   for (const root of world.children) {
     const kind = root.userData.kind;
     if (kind === 'wall' || kind === 'glassWall') {
@@ -2773,7 +3114,7 @@ function groundHeightAt(position, fromHeight = 0) {
   return best;
 }
 
-function collides(position) {
+function collides(position, ignoredVehicle = activeVehicle) {
   const feetY = position.y - 1.7;
   playerCollisionBox.min.set(position.x - 0.29, feetY + 0.08, position.z - 0.29);
   playerCollisionBox.max.set(position.x + 0.29, feetY + 1.82, position.z + 0.29);
@@ -2784,7 +3125,7 @@ function collides(position) {
     if (box.intersectsBox(playerCollisionBox)) return true;
   }
   for (const vehicle of world.children) {
-    if (vehicle === activeVehicle || !['car', 'motorcycle'].includes(vehicle.userData.kind)) continue;
+    if (vehicle === ignoredVehicle || !['car', 'motorcycle'].includes(vehicle.userData.kind)) continue;
     if (new THREE.Box3().setFromObject(vehicle).intersectsBox(playerCollisionBox)) return true;
   }
   return false;
@@ -2806,6 +3147,7 @@ function findGameInteraction() {
   }
   if (['door', 'window', 'slidingGate'].includes(root.userData.kind)) interactionHint.textContent = `E: ${root.userData.open ? 'fechar' : 'abrir'} ${objectLabel(root.userData.kind).toLowerCase()}`;
   else if (['car', 'motorcycle'].includes(root.userData.kind)) interactionHint.textContent = `E: dirigir ${objectLabel(root.userData.kind).toLowerCase()}`;
+  else if (root.userData.kind === 'documentationTerminal') interactionHint.textContent = 'E: abrir documentação';
   else if (NETWORK_KINDS.has(root.userData.kind)) interactionHint.textContent = `E: consultar ${root.userData.meta?.name || objectLabel(root.userData.kind)}`;
   else interactionHint.textContent = '';
 }
@@ -2818,6 +3160,7 @@ function gameInteraction() {
     setOpeningOpen(root, !root.userData.open);
     broadcast('opening', { objectId: root.userData.objectId, open: root.userData.open }).catch(() => {});
   } else if (['car', 'motorcycle'].includes(root.userData.kind)) enterVehicle(root);
+  else if (root.userData.kind === 'documentationTerminal') openDocumentation(root);
   else if (NETWORK_KINDS.has(root.userData.kind)) openEquipment(root.userData.meta || {});
 }
 
@@ -2901,6 +3244,77 @@ $('#joinRoomButton').addEventListener('click', () => {
 });
 $('#exitGame').addEventListener('click', leaveGame);
 $('#closeModal').addEventListener('click', closeEquipment);
+$('#closeDocumentation').addEventListener('click', closeDocumentationViewer);
+documentationList.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-view-document]');
+  if (button) showDocumentationEntry(button.dataset.viewDocument);
+});
+$('#docType').addEventListener('change', syncDocumentTypeFields);
+$('#cancelDocumentEdit').addEventListener('click', () => { resetDocumentEditor(); renderDocumentationEditor(); });
+$('#saveDocumentEntry').addEventListener('click', () => {
+  if (!selected || selected.userData.kind !== 'documentationTerminal') return;
+  const type = $('#docType').value;
+  const title = $('#docTitle').value.trim();
+  const url = $('#docUrl').value.trim();
+  const text = $('#docText').value.trim();
+  if (!title) return setBuilderStatus('Digite um título para o documento.');
+  if (type === 'text' ? !text : !publicDocumentUrl(url)) {
+    return setBuilderStatus(type === 'text' ? 'Digite o conteúdo do documento.' : 'Digite uma URL pública válida começando com https://.');
+  }
+  const documents = documentationEntries(selected);
+  const entry = normalizeDocumentationEntry({
+    id: documentationEditId || crypto.randomUUID(),
+    title,
+    category: $('#docCategory').value,
+    type,
+    url: type === 'text' ? '' : url,
+    text: type === 'text' ? text : '',
+  });
+  const index = documents.findIndex((item) => item.id === entry.id);
+  if (index >= 0) documents[index] = entry;
+  else documents.push(entry);
+  selected.userData.meta.documents = documents;
+  resetDocumentEditor();
+  renderDocumentationEditor();
+  commitHistory(index >= 0 ? 'Documento atualizado' : 'Documento adicionado');
+  setBuilderStatus(index >= 0 ? 'Documento atualizado.' : 'Documento adicionado à central.');
+});
+$('#documentListEditor').addEventListener('click', (event) => {
+  if (!selected || selected.userData.kind !== 'documentationTerminal') return;
+  const documents = documentationEntries(selected);
+  const editButton = event.target.closest('[data-doc-edit]');
+  const deleteButton = event.target.closest('[data-doc-delete]');
+  const upButton = event.target.closest('[data-doc-up]');
+  if (editButton) {
+    const entry = documents.find((item) => item.id === editButton.dataset.docEdit);
+    if (!entry) return;
+    documentationEditId = entry.id;
+    $('#docTitle').value = entry.title;
+    $('#docCategory').value = entry.category;
+    $('#docType').value = entry.type;
+    $('#docUrl').value = entry.url;
+    $('#docText').value = entry.text;
+    $('#saveDocumentEntry').textContent = 'Salvar alteração';
+    $('#cancelDocumentEdit').classList.remove('hidden');
+    syncDocumentTypeFields();
+  } else if (deleteButton) {
+    const index = documents.findIndex((item) => item.id === deleteButton.dataset.docDelete);
+    if (index < 0) return;
+    documents.splice(index, 1);
+    selected.userData.meta.documents = documents;
+    resetDocumentEditor();
+    renderDocumentationEditor();
+    commitHistory('Documento excluído');
+    setBuilderStatus('Documento removido da central.');
+  } else if (upButton) {
+    const index = documents.findIndex((item) => item.id === upButton.dataset.docUp);
+    if (index <= 0) return;
+    [documents[index - 1], documents[index]] = [documents[index], documents[index - 1]];
+    selected.userData.meta.documents = documents;
+    renderDocumentationEditor();
+    commitHistory('Documentos reorganizados');
+  }
+});
 $('#applyProperties').addEventListener('click', applyProperties);
 $('#duplicateObject').addEventListener('click', duplicateSelection);
 $('#deleteObject').addEventListener('click', () => removeRoots([...selectedRoots]));
@@ -3119,6 +3533,11 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 addEventListener('keydown', (event) => {
+  if (event.code === 'Escape' && documentationModal.classList.contains('open')) {
+    event.preventDefault();
+    closeDocumentationViewer();
+    return;
+  }
   keys.add(event.code);
   if (appMode === 'builder') {
     if (event.code === 'F8') {
@@ -3274,13 +3693,35 @@ function animate() {
     updateVehicleAnimation(root, delta);
   }
   for (const avatar of remotePlayers.values()) {
-    const networkAge = performance.now() - (avatar.userData.lastNetworkAt || 0);
-    const velocity = avatar.userData.networkVelocity;
-    if (velocity && networkAge < 2800) avatar.userData.targetPosition.addScaledVector(velocity, delta);
-    avatar.position.lerp(avatar.userData.targetPosition, 1 - Math.exp(-delta * 16));
+    const vehicleId = avatar.userData.inVehicle || '';
+    const riddenVehicle = vehicleId
+      ? world.children.find((root) => root.userData.objectId === vehicleId && ['car', 'motorcycle'].includes(root.userData.kind))
+      : null;
+
+    if (riddenVehicle) {
+      // O avatar continua visível e acompanha o banco da moto/carro.
+      const riderRoot = new THREE.Vector3(
+        0,
+        riddenVehicle.userData.kind === 'motorcycle' ? 0.02 : 0.14,
+        riddenVehicle.userData.kind === 'motorcycle' ? 0.38 : 0.10,
+      );
+      riddenVehicle.localToWorld(riderRoot);
+      avatar.userData.targetPosition.copy(riderRoot);
+      avatar.userData.targetRotation = riddenVehicle.rotation.y;
+      avatar.userData.vehicleKind = riddenVehicle.userData.kind;
+      avatar.userData.moving = false;
+      avatar.position.lerp(riderRoot, 1 - Math.exp(-delta * 24));
+    } else {
+      avatar.userData.vehicleKind = '';
+      const networkAge = performance.now() - (avatar.userData.lastNetworkAt || 0);
+      const velocity = avatar.userData.networkVelocity;
+      if (velocity && networkAge < 2800) avatar.userData.targetPosition.addScaledVector(velocity, delta);
+      avatar.position.lerp(avatar.userData.targetPosition, 1 - Math.exp(-delta * 16));
+    }
+
     let difference = avatar.userData.targetRotation - avatar.rotation.y;
     difference = Math.atan2(Math.sin(difference), Math.cos(difference));
-    avatar.rotation.y += difference * (1 - Math.exp(-delta * 12));
+    avatar.rotation.y += difference * (1 - Math.exp(-delta * 16));
     updateAvatar(avatar, delta, elapsed);
   }
 
