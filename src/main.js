@@ -260,6 +260,7 @@ let realtimeChannel = null;
 let currentRoom = '';
 let localPlayer = null;
 let lastMoveSent = 0;
+let lastPresenceSent = 0;
 let toastTimer = null;
 const remotePlayers = new Map();
 const keys = new Set();
@@ -788,12 +789,14 @@ async function joinOnline(name, room) {
 
   localStorage.setItem('empresa3d-name', name);
   localStorage.setItem('empresa3d-room', room);
+  const spawnAngle = Math.random() * Math.PI * 2;
+  const spawnRadius = 1.5 + Math.random() * 2.5;
   localPlayer = {
     id: crypto.randomUUID(),
     name,
     color: Math.floor(Math.random() * 0xffffff),
-    x: 0,
-    z: 12,
+    x: Math.cos(spawnAngle) * spawnRadius,
+    z: 12 + Math.sin(spawnAngle) * spawnRadius,
     ry: 0,
   };
   currentRoom = room;
@@ -809,6 +812,17 @@ async function joinOnline(name, room) {
     .on('presence', { event: 'sync' }, syncPresencePlayers)
     .on('presence', { event: 'join' }, syncPresencePlayers)
     .on('presence', { event: 'leave' }, syncPresencePlayers)
+    .on('broadcast', { event: 'player_state' }, ({ payload }) => {
+      upsertRemote(payload);
+    })
+    .on('broadcast', { event: 'player_move' }, ({ payload }) => {
+      upsertRemote(payload);
+    })
+    .on('broadcast', { event: 'request_state' }, ({ payload }) => {
+      if (localPlayer && payload?.requesterId !== localPlayer.id) {
+        broadcast('player_state', localPlayer).catch(() => {});
+      }
+    })
     .on('broadcast', { event: 'door' }, ({ payload }) => {
       const door = world.children.find((root) => root.userData.objectId === payload?.objectId && root.userData.kind === 'door');
       if (door) setDoorOpen(door, Boolean(payload.open), false);
@@ -822,10 +836,12 @@ async function joinOnline(name, room) {
     .subscribe(async (status, error) => {
       if (status === 'SUBSCRIBED') {
         await realtimeChannel.track(localPlayer);
+        await broadcast('player_state', localPlayer);
+        await broadcast('request_state', { requesterId: localPlayer.id });
         startGame();
         joinButton.disabled = false;
         $('#onlineWarning').textContent = '';
-        showToast(`Sala: ${room}`);
+        showToast(`Sala online: ${room}`);
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
         joinButton.disabled = false;
         $('#onlineWarning').textContent = `Não foi possível entrar na sala${error?.message ? `: ${error.message}` : '.'}`;
@@ -894,17 +910,17 @@ function startGame() {
   referenceLayer.visible = false;
   orbit.enabled = false;
   transform.detach();
-  camera.position.set(0, 1.7, 12);
-  camera.rotation.set(0, 0, 0);
+  camera.position.set(localPlayer?.x ?? 0, 1.7, localPlayer?.z ?? 12);
+  camera.rotation.set(0, localPlayer?.ry ?? 0, 0);
   updatePlayersList();
   setTimeout(() => renderer.domElement.requestPointerLock?.(), 80);
 }
 
-function setDoorOpen(door, open, broadcast = true) {
+function setDoorOpen(door, open, sendOnline = true) {
   door.userData.closedRotation ??= door.rotation.y;
   door.userData.open = open;
   door.rotation.y = door.userData.closedRotation + (open ? -Math.PI / 2 : 0);
-  if (broadcast) broadcast('door', { objectId: door.userData.objectId, open });
+  if (sendOnline) broadcast('door', { objectId: door.userData.objectId, open }).catch(() => {});
 }
 
 function collides(position) {
@@ -1066,7 +1082,7 @@ function animate() {
       if (!collides(next)) camera.position.copy(next);
     }
     const now = performance.now();
-    if (realtimeChannel && localPlayer && now - lastMoveSent > 100) {
+    if (realtimeChannel && localPlayer && now - lastMoveSent > 80) {
       const direction = new THREE.Vector3();
       camera.getWorldDirection(direction);
       localPlayer = {
@@ -1075,8 +1091,16 @@ function animate() {
         z: camera.position.z,
         ry: Math.atan2(direction.x, direction.z),
       };
-      realtimeChannel.track(localPlayer).catch(() => {});
+
+      // Broadcast é usado para movimento de baixa latência.
+      broadcast('player_move', localPlayer).catch(() => {});
       lastMoveSent = now;
+
+      // Presence fica responsável principalmente por indicar quem está online.
+      if (now - lastPresenceSent > 1800) {
+        realtimeChannel.track(localPlayer).catch(() => {});
+        lastPresenceSent = now;
+      }
     }
   }
   for (const avatar of remotePlayers.values()) {
