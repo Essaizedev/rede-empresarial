@@ -1,0 +1,14 @@
+CORREÇÃO DO ONLINE E INTERAÇÃO
+
+- Clique do mouse não consulta mais equipamentos; somente a tecla E interage.
+- Presence é enviado apenas ao entrar/reconectar, respeitando o limite do Supabase.
+- Movimento deixa de ser transmitido dezenas de vezes por segundo para todos.
+- Frequência adaptativa conforme a quantidade de participantes.
+- Predição local mantém avatares se movendo suavemente entre atualizações.
+- Web Worker mantém heartbeats em segundo plano.
+- Heartbeat callback força reconexão em quedas silenciosas.
+- Erros temporários não expulsam mais o jogador da sala.
+- Presence sync não apaga avatares por uma omissão temporária.
+- Saídas normais continuam imediatas pelo evento player_left e Presence leave.
+
+Atualização rápida: substitua apenas src/main.js.

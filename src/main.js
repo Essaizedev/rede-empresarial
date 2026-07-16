@@ -97,7 +97,11 @@ if (SUPABASE_URL || SUPABASE_KEY) {
     }
     supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-      realtime: { params: { eventsPerSecond: 25 } },
+      realtime: {
+        params: { eventsPerSecond: 20 },
+        worker: true,
+        heartbeatCallback: handleRealtimeHeartbeat,
+      },
     });
   } catch (error) {
     supabaseInitError = error instanceof Error ? error.message : String(error);
@@ -659,14 +663,17 @@ let realtimeChannel = null;
 let currentRoom = '';
 let localPlayer = null;
 let lastMoveSent = 0;
-let lastPresenceSent = 0;
 let lastRemoteSweep = 0;
+let lastMovementSignature = '';
+let realtimeEverSubscribed = false;
+let reconnectNoticeShown = false;
 let toastTimer = null;
 let interactionRoot = null;
 let canvasPointerStart = null;
 let canvasPointerMoved = false;
 const remotePlayers = new Map();
 const remotePlayerLastSeen = new Map();
+const presenceMissingSince = new Map();
 const explicitlyDepartedPlayers = new Set();
 const keys = new Set();
 let staticCollisionBoxes = [];
@@ -1843,16 +1850,29 @@ function makeRemoteAvatar(player) {
 
 function upsertRemote(player) {
   if (!player?.id || player.id === localPlayer?.id || explicitlyDepartedPlayers.has(player.id)) return;
-  remotePlayerLastSeen.set(player.id, performance.now());
+  const now = performance.now();
+  remotePlayerLastSeen.set(player.id, now);
+  presenceMissingSince.delete(player.id);
   let avatar = remotePlayers.get(player.id);
+  let listChanged = false;
   if (!avatar) {
     avatar = makeRemoteAvatar(player);
     remotePlayers.set(player.id, avatar);
+    listChanged = true;
     showToast(`${player.name || 'Uma pessoa'} entrou`);
+  } else if (player.name && avatar.userData.playerName !== player.name) {
+    avatar.userData.playerName = player.name;
+    listChanged = true;
   }
   applyAvatarState(avatar, player);
+  const velocity = avatar.userData.networkVelocity || new THREE.Vector3();
+  velocity.set(Number(player.vx) || 0, 0, Number(player.vz) || 0);
+  avatar.userData.networkVelocity = velocity;
+  avatar.userData.lastNetworkAt = now;
+  const transitSeconds = Math.min(0.3, Math.max(0, (Date.now() - (Number(player.sentAt) || Date.now())) / 1000));
+  avatar.userData.targetPosition.addScaledVector(velocity, transitSeconds);
   avatar.visible = !player.inVehicle;
-  updatePlayersList();
+  if (listChanged) updatePlayersList();
 }
 
 function removeRemote(id) {
@@ -1868,6 +1888,7 @@ function removeRemote(id) {
   disposeRoot(avatar);
   remotePlayers.delete(id);
   remotePlayerLastSeen.delete(id);
+  presenceMissingSince.delete(id);
   updatePlayersList();
 }
 
@@ -1878,6 +1899,7 @@ function clearAvatars() {
   }
   remotePlayers.clear();
   remotePlayerLastSeen.clear();
+  presenceMissingSince.clear();
   explicitlyDepartedPlayers.clear();
   updatePlayersList();
 }
@@ -1901,13 +1923,36 @@ function markPlayerLeft(id) {
 
 function syncPresencePlayers() {
   if (!realtimeChannel) return;
+  const now = performance.now();
   const seen = new Set();
   for (const player of flattenPresenceState(realtimeChannel.presenceState())) {
     if (!player?.id || player.id === localPlayer?.id || explicitlyDepartedPlayers.has(player.id)) continue;
     seen.add(player.id);
     upsertRemote(player);
   }
-  for (const id of [...remotePlayers.keys()]) if (!seen.has(id)) removeRemote(id);
+  // Um sync pode reconciliar o estado e omitir alguém momentaneamente. Em vez
+  // de apagar o avatar imediatamente, aguardamos um pequeno período ou o leave.
+  for (const id of remotePlayers.keys()) {
+    if (seen.has(id)) presenceMissingSince.delete(id);
+    else if (!presenceMissingSince.has(id)) presenceMissingSince.set(id, now);
+  }
+}
+
+function handlePresenceJoin({ newPresences = [] } = {}) {
+  for (const player of newPresences) upsertRemote(player);
+}
+
+function handlePresenceLeave({ leftPresences = [] } = {}) {
+  for (const player of leftPresences) markPlayerLeft(player?.id);
+}
+
+function handleRealtimeHeartbeat(status) {
+  if (status !== 'disconnected' || !supabase) return;
+  if (!reconnectNoticeShown && appMode === 'game') {
+    reconnectNoticeShown = true;
+    showToast('Reconectando à sala...');
+  }
+  setTimeout(() => supabase?.realtime?.connect?.(), 0);
 }
 
 async function broadcast(event, payload) {
@@ -2030,6 +2075,9 @@ function disconnectRealtime({ announce = true } = {}) {
   const oldPlayer = localPlayer;
   realtimeChannel = null;
   currentRoom = '';
+  realtimeEverSubscribed = false;
+  reconnectNoticeShown = false;
+  lastMovementSignature = '';
 
   if (oldChannel && supabase) {
     // A interface sai imediatamente. A limpeza online continua sem bloquear a tela.
@@ -2105,13 +2153,13 @@ async function joinOnline(name, room) {
   };
   currentRoom = room;
   realtimeChannel = supabase.channel(`empresa3d:${room}`, {
-    config: { private: false, broadcast: { self: false }, presence: { key: localPlayer.id } },
+    config: { private: false, broadcast: { self: false, ack: false }, presence: { key: localPlayer.id } },
   });
 
   realtimeChannel
     .on('presence', { event: 'sync' }, syncPresencePlayers)
-    .on('presence', { event: 'join' }, syncPresencePlayers)
-    .on('presence', { event: 'leave' }, syncPresencePlayers)
+    .on('presence', { event: 'join' }, handlePresenceJoin)
+    .on('presence', { event: 'leave' }, handlePresenceLeave)
     .on('broadcast', { event: 'player_state' }, ({ payload }) => upsertRemote(payload))
     .on('broadcast', { event: 'player_move' }, ({ payload }) => upsertRemote(payload))
     .on('broadcast', { event: 'player_left' }, ({ payload }) => markPlayerLeft(payload?.id))
@@ -2140,17 +2188,34 @@ async function joinOnline(name, room) {
     })
     .subscribe(async (status, error) => {
       if (status === 'SUBSCRIBED') {
-        await realtimeChannel.track(localPlayer);
-        await broadcast('player_state', localPlayer);
+        realtimeEverSubscribed = true;
+        reconnectNoticeShown = false;
+        explicitlyDepartedPlayers.clear();
+        await realtimeChannel.track({
+          id: localPlayer.id,
+          name: localPlayer.name,
+          avatar: localPlayer.avatar,
+          x: localPlayer.x,
+          z: localPlayer.z,
+          ry: localPlayer.ry,
+          moving: false,
+          inVehicle: localPlayer.inVehicle || '',
+        });
+        await broadcast('player_state', { ...localPlayer, vx: 0, vz: 0, sentAt: Date.now() });
         await broadcast('request_state', { requesterId: localPlayer.id });
-        startGame();
+        if (appMode !== 'game') startGame();
         joinButton.disabled = false;
         $('#onlineWarning').textContent = '';
         showToast(`Sala online: ${room}`);
-      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
         joinButton.disabled = false;
-        $('#onlineWarning').textContent = `Não foi possível entrar${error?.message ? `: ${error.message}` : '.'}`;
-        disconnectRealtime();
+        const detail = error?.message ? `: ${error.message}` : '';
+        if (!realtimeEverSubscribed) $('#onlineWarning').textContent = `Tentando conectar novamente${detail}`;
+        if (!reconnectNoticeShown && appMode === 'game') {
+          reconnectNoticeShown = true;
+          showToast('Conexão instável. Reconectando...');
+        }
+        setTimeout(() => supabase?.realtime?.connect?.(), 250);
       }
     });
 }
@@ -2570,7 +2635,7 @@ renderer.domElement.addEventListener('click', () => {
   if (appMode !== 'game') return;
   renderer.domElement.focus({ preventScroll: true });
   if (!pointerControls.isLocked) requestGamePointerLock();
-  else gameInteraction();
+  // Consultas e interações acontecem exclusivamente pela tecla E.
 });
 
 const GAME_CAPTURED_CODES = new Set([
@@ -2677,41 +2742,63 @@ function animate() {
     updateFirstPersonBody(delta, moving);
 
     const now = performance.now();
-    if (realtimeChannel && now - lastRemoteSweep > 750) {
-      // Fallback para quedas bruscas de conexão. Saídas normais são removidas
-      // quase imediatamente pelo evento player_left e pelo Presence leave.
-      for (const [id, lastSeen] of remotePlayerLastSeen) {
-        if (now - lastSeen > 5000) removeRemote(id);
+    if (realtimeChannel && now - lastRemoteSweep > 800) {
+      // Presence leave remove imediatamente. Este fallback só remove quem ficou
+      // ausente de vários syncs consecutivos, evitando desaparecimentos falsos.
+      for (const [id, missingSince] of presenceMissingSince) {
+        if (now - missingSince > 8000) removeRemote(id);
       }
       lastRemoteSweep = now;
     }
-    const moveSendInterval = settings.quality === 'low' ? 110 : settings.quality === 'medium' ? 90 : 70;
-    if (realtimeChannel && localPlayer && now - lastMoveSent > moveSendInterval) {
+
+    if (realtimeChannel && localPlayer) {
       const look = new THREE.Vector3();
       gameCamera.getWorldDirection(look);
-      localPlayer = {
-        ...localPlayer,
-        x: activeVehicle ? activeVehicle.position.x : gameCamera.position.x,
-        z: activeVehicle ? activeVehicle.position.z : gameCamera.position.z,
-        ry: activeVehicle ? activeVehicle.rotation.y : Math.atan2(look.x, look.z),
-        moving,
-        inVehicle: activeVehicle?.userData.objectId || '',
-      };
-      broadcast('player_move', localPlayer).catch(() => {});
-      if (activeVehicle) {
-        broadcast('vehicle_state', {
-          objectId: activeVehicle.userData.objectId,
-          x: activeVehicle.position.x,
-          z: activeVehicle.position.z,
-          ry: activeVehicle.rotation.y,
-          speed: activeVehicle.userData.speed,
-          driverId: localPlayer.id,
-        }).catch(() => {});
-      }
-      lastMoveSent = now;
-      if (now - lastPresenceSent > 1700) {
-        realtimeChannel.track(localPlayer).catch(() => {});
-        lastPresenceSent = now;
+      const playerCount = Math.max(1, remotePlayers.size + 1);
+      // O plano gratuito possui limite compartilhado de mensagens. Ajustamos a
+      // frequência conforme a quantidade de pessoas e prevemos o movimento entre
+      // pacotes para manter a animação fluida sem derrubar o canal.
+      const correctionInterval = THREE.MathUtils.clamp((playerCount * playerCount / 70) * 1000, 70, 2200);
+      const movementSignature = `${forward}:${side}:${keys.has('ShiftLeft') || keys.has('ShiftRight')}:${activeVehicle?.userData.objectId || ''}:${Math.sign(activeVehicle?.userData.speed || 0)}`;
+      const stateChanged = movementSignature !== lastMovementSignature;
+      const idleInterval = 2400;
+      const sendInterval = moving ? correctionInterval : idleInterval;
+
+      if (stateChanged || now - lastMoveSent > sendInterval) {
+        const velocity = new THREE.Vector3();
+        if (activeVehicle) {
+          velocity.set(0, 0, -1).applyQuaternion(activeVehicle.quaternion).multiplyScalar(Number(activeVehicle.userData.speed) || 0);
+        } else if (moving && pointerControls.isLocked) {
+          const direction = look.clone().setY(0).normalize();
+          const right = new THREE.Vector3().crossVectors(direction, new THREE.Vector3(0, 1, 0)).normalize();
+          const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6.4 : 4.2;
+          velocity.copy(direction.multiplyScalar(forward).add(right.multiplyScalar(side)).normalize().multiplyScalar(speed));
+        }
+
+        localPlayer = {
+          ...localPlayer,
+          x: activeVehicle ? activeVehicle.position.x : gameCamera.position.x,
+          z: activeVehicle ? activeVehicle.position.z : gameCamera.position.z,
+          ry: activeVehicle ? activeVehicle.rotation.y : Math.atan2(look.x, look.z),
+          moving,
+          inVehicle: activeVehicle?.userData.objectId || '',
+          vx: velocity.x,
+          vz: velocity.z,
+          sentAt: Date.now(),
+        };
+        broadcast('player_move', localPlayer).catch(() => {});
+        if (activeVehicle && (stateChanged || now - lastMoveSent > correctionInterval)) {
+          broadcast('vehicle_state', {
+            objectId: activeVehicle.userData.objectId,
+            x: activeVehicle.position.x,
+            z: activeVehicle.position.z,
+            ry: activeVehicle.rotation.y,
+            speed: activeVehicle.userData.speed,
+            driverId: localPlayer.id,
+          }).catch(() => {});
+        }
+        lastMoveSent = now;
+        lastMovementSignature = movementSignature;
       }
     }
   }
@@ -2721,7 +2808,10 @@ function animate() {
     updateVehicleAnimation(root, delta);
   }
   for (const avatar of remotePlayers.values()) {
-    avatar.position.lerp(avatar.userData.targetPosition, 1 - Math.exp(-delta * 12));
+    const networkAge = performance.now() - (avatar.userData.lastNetworkAt || 0);
+    const velocity = avatar.userData.networkVelocity;
+    if (velocity && networkAge < 2800) avatar.userData.targetPosition.addScaledVector(velocity, delta);
+    avatar.position.lerp(avatar.userData.targetPosition, 1 - Math.exp(-delta * 16));
     let difference = avatar.userData.targetRotation - avatar.rotation.y;
     difference = Math.atan2(Math.sin(difference), Math.cos(difference));
     avatar.rotation.y += difference * (1 - Math.exp(-delta * 12));
