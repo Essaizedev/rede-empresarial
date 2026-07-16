@@ -1,0 +1,22 @@
+ATUALIZAÇÃO V4
+
+1. Pointer Lock
+- Pressionar Esc não gera mais tela vermelha.
+- O jogo não tenta recapturar o mouse automaticamente logo após o Esc.
+- Há um pequeno intervalo de segurança e uma mensagem para clicar novamente.
+- Erros recuperáveis de Pointer Lock deixam de ser tratados como erro fatal.
+
+2. Retorno do teste
+- Ao sair de “Testar cenário”, o sistema volta diretamente ao editor.
+- Ao sair de uma sala online, volta à tela inicial.
+- O botão muda para “Voltar ao editor” ou “Sair da sala”, conforme o modo.
+
+3. Avatares
+- Nova escolha: Mulher ou Homem.
+- A silhueta muda de forma leve, mantendo o modelo low-poly e econômico.
+- A escolha é enviada no multiplayer.
+
+4. Camisas
+- As camisas ganharam emblemas estilizados inspirados nas seleções.
+- Os emblemas usam escudo, cores nacionais e siglas do país.
+- Não são reproduções oficiais das marcas das federações.

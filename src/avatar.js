@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 
 export const DEFAULT_AVATAR = Object.freeze({
+  bodyType: 'woman',
   skin: '#d8a178',
   hairStyle: 'short',
   hair: '#2e211d',
@@ -11,6 +12,10 @@ export const DEFAULT_AVATAR = Object.freeze({
 });
 
 export const AVATAR_OPTIONS = {
+  bodyTypes: [
+    { value: 'woman', label: 'Mulher' },
+    { value: 'man', label: 'Homem' },
+  ],
   skin: ['#f2d2b6', '#e5b38d', '#d08b62', '#a86645', '#75442f', '#4c2b20'],
   hair: ['#201815', '#4b2d1f', '#7a4b2d', '#b98654', '#d9c2a1', '#111111', '#713a2b'],
   shirt: ['#397bc5', '#c74c4c', '#4e9a64', '#d28a2d', '#7d5bc7', '#e3d28e', '#2c2f33'],
@@ -38,6 +43,7 @@ export const AVATAR_OPTIONS = {
 };
 
 export function sanitizeAvatar(input = {}) {
+  const bodyTypeValues = new Set(AVATAR_OPTIONS.bodyTypes.map((item) => item.value));
   const styleValues = new Set(AVATAR_OPTIONS.hairStyles.map((item) => item.value));
   const shirtStyleValues = new Set(AVATAR_OPTIONS.shirtStyles.map((item) => item.value));
   const color = (value, fallback) => {
@@ -49,6 +55,7 @@ export function sanitizeAvatar(input = {}) {
   };
 
   return {
+    bodyType: bodyTypeValues.has(input.bodyType) ? input.bodyType : DEFAULT_AVATAR.bodyType,
     skin: color(input.skin, DEFAULT_AVATAR.skin),
     hairStyle: styleValues.has(input.hairStyle) ? input.hairStyle : DEFAULT_AVATAR.hairStyle,
     hair: color(input.hair, DEFAULT_AVATAR.hair),
@@ -177,6 +184,137 @@ function jerseyPatch(width, height, color, x, y, z = -0.181) {
   return patch;
 }
 
+
+function drawShieldPath(context, size) {
+  const x = size * 0.18;
+  const y = size * 0.08;
+  const w = size * 0.64;
+  const h = size * 0.82;
+  context.beginPath();
+  context.moveTo(x, y);
+  context.lineTo(x + w, y);
+  context.lineTo(x + w * 0.94, y + h * 0.62);
+  context.quadraticCurveTo(x + w * 0.5, y + h, x + w * 0.06, y + h * 0.62);
+  context.closePath();
+}
+
+function selectionBadgeTexture(style) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const context = canvas.getContext('2d');
+  const palettes = {
+    brazil: ['#18864b', '#f4cf27', '#2657a7', 'BRA'],
+    argentina: ['#74b9e6', '#ffffff', '#d8ad38', 'ARG'],
+    portugal: ['#176b46', '#b51f32', '#e9c451', 'POR'],
+    france: ['#183b73', '#ffffff', '#d62f3d', 'FRA'],
+    germany: ['#161616', '#c93632', '#d4ad2d', 'GER'],
+    spain: ['#b8202d', '#f0c72d', '#6e1831', 'ESP'],
+    italy: ['#2872be', '#ffffff', '#d43c46', 'ITA'],
+    japan: ['#244e91', '#ffffff', '#c83242', 'JPN'],
+  };
+  const [primary, secondary, accent, code] = palettes[style] || ['#444', '#eee', '#888', 'TEAM'];
+
+  context.clearRect(0, 0, 128, 128);
+  context.save();
+  drawShieldPath(context, 128);
+  context.clip();
+
+  if (style === 'argentina') {
+    for (let index = 0; index < 5; index += 1) {
+      context.fillStyle = index % 2 === 0 ? primary : secondary;
+      context.fillRect(index * 26 - 1, 0, 27, 128);
+    }
+  } else if (style === 'france' || style === 'italy') {
+    const colors = style === 'france'
+      ? ['#183b73', '#ffffff', '#d62f3d']
+      : ['#2d9a55', '#ffffff', '#d43c46'];
+    colors.forEach((color, index) => {
+      context.fillStyle = color;
+      context.fillRect(index * 43, 0, 44, 128);
+    });
+  } else if (style === 'germany') {
+    ['#161616', '#c93632', '#d4ad2d'].forEach((color, index) => {
+      context.fillStyle = color;
+      context.fillRect(0, index * 43, 128, 44);
+    });
+  } else if (style === 'portugal') {
+    context.fillStyle = '#176b46';
+    context.fillRect(0, 0, 48, 128);
+    context.fillStyle = '#b51f32';
+    context.fillRect(48, 0, 80, 128);
+  } else if (style === 'spain') {
+    context.fillStyle = '#b8202d';
+    context.fillRect(0, 0, 128, 128);
+    context.fillStyle = '#f0c72d';
+    context.fillRect(0, 31, 128, 66);
+  } else {
+    context.fillStyle = primary;
+    context.fillRect(0, 0, 128, 128);
+  }
+
+  if (style === 'brazil') {
+    context.fillStyle = secondary;
+    context.beginPath();
+    context.moveTo(64, 19);
+    context.lineTo(105, 64);
+    context.lineTo(64, 109);
+    context.lineTo(23, 64);
+    context.closePath();
+    context.fill();
+    context.fillStyle = accent;
+    context.beginPath();
+    context.arc(64, 64, 22, 0, Math.PI * 2);
+    context.fill();
+  } else if (style === 'japan') {
+    context.fillStyle = secondary;
+    context.fillRect(0, 0, 128, 128);
+    context.fillStyle = accent;
+    context.beginPath();
+    context.arc(64, 57, 26, 0, Math.PI * 2);
+    context.fill();
+  }
+
+  context.restore();
+
+  context.lineWidth = 8;
+  context.strokeStyle = accent;
+  drawShieldPath(context, 128);
+  context.stroke();
+
+  context.fillStyle = '#ffffff';
+  context.strokeStyle = 'rgba(0,0,0,.65)';
+  context.lineWidth = 5;
+  context.font = '900 27px system-ui, Arial';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.strokeText(code, 64, 83);
+  context.fillText(code, 64, 83);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return texture;
+}
+
+function createSelectionBadge(style) {
+  const texture = selectionBadgeTexture(style);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+  });
+  const badge = new THREE.Mesh(new THREE.PlaneGeometry(0.17, 0.2), material);
+  badge.position.set(0.17, 0.61, -0.194);
+  badge.rotation.y = Math.PI;
+  badge.renderOrder = 4;
+  badge.userData.isSelectionBadge = true;
+  return badge;
+}
+
 function addJerseyDetails(hips, appearance) {
   const style = appearance.shirtStyle;
   if (!style || style === 'custom') return;
@@ -206,18 +344,11 @@ function addJerseyDetails(hips, appearance) {
     details.add(jerseyPatch(0.055, 0.16, palette.accent2, 0.04, 0.61));
   } else if (style === 'japan') {
     details.add(jerseyPatch(0.5, 0.05, palette.accent, 0, 0.70));
-    const disc = mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.025, 20), palette.accent2);
-    disc.rotation.x = Math.PI / 2;
-    disc.position.set(0.16, 0.60, -0.19);
-    details.add(disc);
   } else if (style === 'brazil') {
     details.add(jerseyPatch(0.5, 0.055, palette.accent, 0, 0.71));
-    const badge = mesh(new THREE.CircleGeometry(0.075, 20), palette.accent2);
-    badge.position.set(0.17, 0.60, -0.194);
-    badge.rotation.y = Math.PI;
-    details.add(badge);
   }
 
+  details.add(createSelectionBadge(style));
   hips.add(details);
 }
 
@@ -231,9 +362,27 @@ export function createAvatar(player = {}, options = {}) {
   root.add(hips);
 
   const palette = shirtPalette(appearance);
-  const torso = mesh(new THREE.BoxGeometry(0.62, 0.72, 0.34), palette.base);
+  const isWoman = appearance.bodyType === 'woman';
+  const torsoWidth = isWoman ? 0.55 : 0.66;
+  const shoulderX = isWoman ? 0.35 : 0.41;
+  const legX = isWoman ? 0.16 : 0.18;
+
+  const torso = mesh(new THREE.BoxGeometry(torsoWidth, 0.72, 0.34), palette.base);
   torso.position.y = 0.48;
   hips.add(torso);
+
+  if (isWoman) {
+    const waist = mesh(new THREE.BoxGeometry(0.47, 0.25, 0.32), palette.base);
+    waist.position.y = 0.14;
+    hips.add(waist);
+    const hipShape = mesh(new THREE.BoxGeometry(0.61, 0.22, 0.34), appearance.pants);
+    hipShape.position.y = -0.02;
+    hips.add(hipShape);
+  } else {
+    const hipShape = mesh(new THREE.BoxGeometry(0.55, 0.2, 0.33), appearance.pants);
+    hipShape.position.y = -0.02;
+    hips.add(hipShape);
+  }
 
   const neck = mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.12, 10), appearance.skin);
   neck.position.y = 0.91;
@@ -259,12 +408,12 @@ export function createAvatar(player = {}, options = {}) {
   addJerseyDetails(hips, appearance);
 
   const leftArm = makeLimb(palette.base, 0.62, 0.105);
-  leftArm.pivot.position.set(-0.39, 0.78, 0);
+  leftArm.pivot.position.set(-shoulderX, 0.78, 0);
   leftArm.pivot.rotation.z = -0.08;
   hips.add(leftArm.pivot);
 
   const rightArm = makeLimb(palette.base, 0.62, 0.105);
-  rightArm.pivot.position.set(0.39, 0.78, 0);
+  rightArm.pivot.position.set(shoulderX, 0.78, 0);
   rightArm.pivot.rotation.z = 0.08;
   hips.add(rightArm.pivot);
 
@@ -277,11 +426,11 @@ export function createAvatar(player = {}, options = {}) {
   rightArm.pivot.add(rightHand);
 
   const leftLeg = makeLimb(appearance.pants, 0.76, 0.12);
-  leftLeg.pivot.position.set(-0.17, 0.08, 0);
+  leftLeg.pivot.position.set(-legX, 0.08, 0);
   hips.add(leftLeg.pivot);
 
   const rightLeg = makeLimb(appearance.pants, 0.76, 0.12);
-  rightLeg.pivot.position.set(0.17, 0.08, 0);
+  rightLeg.pivot.position.set(legX, 0.08, 0);
   hips.add(rightLeg.pivot);
 
   const leftShoe = mesh(new THREE.BoxGeometry(0.25, 0.15, 0.38), appearance.shoes);
@@ -314,6 +463,7 @@ export function createAvatar(player = {}, options = {}) {
     rightLeg: rightLeg.pivot,
   };
   root.userData.appearance = appearance;
+  root.userData.bodyType = appearance.bodyType;
   return root;
 }
 

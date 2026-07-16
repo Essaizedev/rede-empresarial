@@ -113,8 +113,15 @@ function clearChildren(root) {
 export function disposeRoot(root) {
   root.traverse((child) => {
     child.geometry?.dispose?.();
-    if (Array.isArray(child.material)) child.material.forEach((material) => material?.dispose?.());
-    else child.material?.dispose?.();
+    const disposeMaterial = (material) => {
+      if (!material) return;
+      for (const key of ['map', 'alphaMap', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap']) {
+        material[key]?.dispose?.();
+      }
+      material.dispose?.();
+    };
+    if (Array.isArray(child.material)) child.material.forEach(disposeMaterial);
+    else disposeMaterial(child.material);
   });
 }
 

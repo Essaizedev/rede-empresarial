@@ -56,8 +56,30 @@ function showFatalError(message) {
   box.textContent = `Erro ao abrir o site: ${message}`;
 }
 
-window.addEventListener('error', (event) => showFatalError(event.error?.message || event.message || 'erro desconhecido'));
-window.addEventListener('unhandledrejection', (event) => showFatalError(event.reason?.message || String(event.reason || 'erro desconhecido')));
+function isRecoverablePointerLockError(value) {
+  const message = value?.message || String(value || '');
+  return /pointer lock|pointerlock/i.test(message)
+    && /immediately|exited|user activation|not allowed|denied|acquired/i.test(message);
+}
+
+window.addEventListener('error', (event) => {
+  const error = event.error || event.message;
+  if (isRecoverablePointerLockError(error)) {
+    event.preventDefault?.();
+    console.warn('Pointer Lock temporariamente indisponível:', error);
+    return;
+  }
+  showFatalError(event.error?.message || event.message || 'erro desconhecido');
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  if (isRecoverablePointerLockError(event.reason)) {
+    event.preventDefault();
+    console.warn('Pointer Lock temporariamente indisponível:', event.reason);
+    return;
+  }
+  showFatalError(event.reason?.message || String(event.reason || 'erro desconhecido'));
+});
 
 const SUPABASE_URL = String(import.meta.env.VITE_SUPABASE_URL || '').trim().replace(/\/$/, '');
 const SUPABASE_KEY = String(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
@@ -81,6 +103,7 @@ if (SUPABASE_URL || SUPABASE_KEY) {
   }
 }
 
+const bodyTypeOptions = AVATAR_OPTIONS.bodyTypes.map((item) => `<option value="${item.value}">${item.label}</option>`).join('');
 const hairOptions = AVATAR_OPTIONS.hairStyles.map((item) => `<option value="${item.value}">${item.label}</option>`).join('');
 const shirtStyleOptions = AVATAR_OPTIONS.shirtStyles.map((item) => `<option value="${item.value}">${item.label}</option>`).join('');
 
@@ -101,6 +124,7 @@ app.innerHTML = `
           <strong>Personalize seu avatar</strong>
           <span>Essa aparência será vista pelos colegas.</span>
         </div>
+        <label>Personagem<select id="avatarBodyType">${bodyTypeOptions}</select></label>
         <label>Tom de pele<input id="avatarSkin" type="color" /></label>
         <label>Cabelo<select id="avatarHairStyle">${hairOptions}</select></label>
         <label>Cor cabelo/boné<input id="avatarHair" type="color" /></label>
@@ -360,6 +384,7 @@ app.innerHTML = `
       <small>Pressione Esc para liberar o mouse e alterar.</small>
     </div>
     <button id="exitGame" class="danger">Sair</button>
+    <div id="pointerLockHint">Clique na tela para controlar o personagem</div>
     <div id="crosshair"></div>
     <div id="interactionHint"></div>
     <div id="toast"></div>
@@ -393,10 +418,13 @@ const selectionMarquee = $('#selectionMarquee');
 const playersList = $('#playersList');
 const toast = $('#toast');
 const interactionHint = $('#interactionHint');
+const pointerLockHint = $('#pointerLockHint');
+const exitGameButton = $('#exitGame');
 const joinButton = $('#joinRoomButton');
 const publishButton = $('#publishScene');
 
 const avatarInputs = {
+  bodyType: $('#avatarBodyType'),
   skin: $('#avatarSkin'),
   hairStyle: $('#avatarHairStyle'),
   hair: $('#avatarHair'),
@@ -473,6 +501,10 @@ mapControls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
 
 const pointerControls = new PointerLockControls(gameCamera, renderer.domElement);
 pointerControls.pointerSpeed = initialSensitivity;
+const POINTER_LOCK_COOLDOWN_MS = 850;
+let lastPointerUnlockAt = -Infinity;
+let pointerLockPending = false;
+let gameReturnMode = 'home';
 let activeBuilderCamera = topCamera;
 
 const transform = new TransformControls(activeBuilderCamera, renderer.domElement);
@@ -1580,9 +1612,70 @@ function setBuilderView(view) {
   $('#perspectiveView').classList.toggle('active', view === 'perspective');
 }
 
+function setPointerLockHint(visible, message = 'Clique na tela para controlar o personagem') {
+  if (!pointerLockHint) return;
+  pointerLockHint.textContent = message;
+  pointerLockHint.classList.toggle('visible', Boolean(visible));
+}
+
+async function requestGamePointerLock() {
+  if (appMode !== 'game' || pointerControls.isLocked || pointerLockPending) return false;
+  if ($('#equipmentModal')?.classList.contains('open')) return false;
+
+  const elapsedSinceUnlock = performance.now() - lastPointerUnlockAt;
+  if (elapsedSinceUnlock < POINTER_LOCK_COOLDOWN_MS) {
+    const remaining = Math.ceil((POINTER_LOCK_COOLDOWN_MS - elapsedSinceUnlock) / 100) / 10;
+    setPointerLockHint(true, `Aguarde ${remaining.toFixed(1).replace('.', ',')} s e clique novamente`);
+    return false;
+  }
+
+  pointerLockPending = true;
+  try {
+    let result;
+    try {
+      result = renderer.domElement.requestPointerLock({ unadjustedMovement: true });
+      if (result?.then) await result;
+    } catch (firstError) {
+      if (isRecoverablePointerLockError(firstError)) throw firstError;
+      result = renderer.domElement.requestPointerLock();
+      if (result?.then) await result;
+    }
+    return true;
+  } catch (error) {
+    console.warn('Não foi possível capturar o mouse:', error);
+    if (isRecoverablePointerLockError(error)) {
+      lastPointerUnlockAt = performance.now();
+      setPointerLockHint(true, 'O mouse acabou de ser liberado. Clique novamente em um instante.');
+    } else {
+      setPointerLockHint(true, 'Clique novamente para controlar o personagem.');
+    }
+    return false;
+  } finally {
+    pointerLockPending = false;
+  }
+}
+
+function leaveGame() {
+  const returnToBuilder = gameReturnMode === 'builder';
+  keys.clear();
+  document.body.classList.remove('game-keyboard-captured');
+  if (document.pointerLockElement) document.exitPointerLock?.();
+  $('#equipmentModal').classList.remove('open');
+  disconnectRealtime();
+
+  if (returnToBuilder) {
+    openBuilder();
+    setBuilderStatus('Teste encerrado. Você voltou ao modo editor.');
+  } else {
+    showHome();
+  }
+}
+
 function showHome() {
   appMode = 'home';
+  gameReturnMode = 'home';
   keys.clear();
+  setPointerLockHint(false);
   document.body.classList.remove('game-keyboard-captured');
   document.exitPointerLock?.();
   mapControls.enabled = false;
@@ -1599,6 +1692,9 @@ function showHome() {
 
 function openBuilder() {
   appMode = 'builder';
+  gameReturnMode = 'home';
+  keys.clear();
+  setPointerLockHint(false);
   homeOverlay.classList.add('hidden');
   builderUi.classList.remove('hidden');
   gameUi.classList.add('hidden');
@@ -1625,7 +1721,7 @@ function openEquipment(meta) {
 
 function closeEquipment() {
   $('#equipmentModal').classList.remove('open');
-  if (appMode === 'game') pointerControls.lock();
+  if (appMode === 'game') requestGamePointerLock();
 }
 
 function makeRemoteAvatar(player) {
@@ -1718,6 +1814,7 @@ async function loadPublishedScene(room) {
 
 async function joinOnline(name, room) {
   if (!supabase) return;
+  gameReturnMode = 'home';
   joinButton.disabled = true;
   $('#onlineWarning').textContent = 'Entrando na sala...';
   disconnectRealtime();
@@ -1825,6 +1922,7 @@ async function publishCurrentScene(room, pin) {
 
 function startSoloGame() {
   disconnectRealtime();
+  gameReturnMode = 'builder';
   localPlayer = { id: crypto.randomUUID(), name: 'Você', avatar: avatarConfig, x: 0, z: 12, ry: 0, moving: false };
   startGame();
 }
@@ -1849,8 +1947,9 @@ function startGame() {
   gameCamera.rotation.set(0, localPlayer?.ry ?? 0, 0);
   rebuildGameCaches();
   updatePlayersList();
+  exitGameButton.textContent = gameReturnMode === 'builder' ? 'Voltar ao editor' : 'Sair da sala';
   renderer.domElement.focus({ preventScroll: true });
-  setTimeout(() => pointerControls.lock(), 100);
+  setPointerLockHint(true);
 }
 
 function rebuildGameCaches() {
@@ -1979,7 +2078,7 @@ $('#joinRoomButton').addEventListener('click', () => {
   if (!room) return alert('Digite o código da sala.');
   joinOnline(name, room);
 });
-$('#exitGame').addEventListener('click', showHome);
+$('#exitGame').addEventListener('click', leaveGame);
 $('#closeModal').addEventListener('click', closeEquipment);
 $('#applyProperties').addEventListener('click', applyProperties);
 $('#duplicateObject').addEventListener('click', duplicateSelection);
@@ -2144,7 +2243,7 @@ $('#collapseTools').addEventListener('click', () => {
 renderer.domElement.addEventListener('click', () => {
   if (appMode !== 'game') return;
   renderer.domElement.focus({ preventScroll: true });
-  if (!pointerControls.isLocked) pointerControls.lock();
+  if (!pointerControls.isLocked) requestGamePointerLock();
   else gameInteraction();
 });
 
@@ -2167,7 +2266,14 @@ addEventListener('keyup', preventBrowserCommandWhilePlaying, { capture: true });
 addEventListener('blur', () => keys.clear());
 document.addEventListener('visibilitychange', () => { if (document.hidden) keys.clear(); });
 document.addEventListener('pointerlockchange', () => {
-  if (appMode === 'game' && !pointerControls.isLocked) keys.clear();
+  if (appMode !== 'game') return;
+  if (pointerControls.isLocked) {
+    setPointerLockHint(false);
+  } else {
+    keys.clear();
+    lastPointerUnlockAt = performance.now();
+    setPointerLockHint(true, 'Mouse liberado. Clique na tela para continuar.');
+  }
 });
 
 addEventListener('keydown', (event) => {

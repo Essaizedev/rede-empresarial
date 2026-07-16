@@ -49,7 +49,7 @@ canvas.webgl { position: fixed; inset: 0; display: block; z-index: 0; }
 #avatarPreview { width: 210px; height: 220px; border-radius: 20px; overflow: hidden; background: radial-gradient(circle, #6b776d, #353e38); border: 1px solid #738077; }
 #avatarPreview canvas { width: 100% !important; height: 100% !important; }
 .avatar-editor {
-  display: grid; grid-template-columns: 1.35fr repeat(7, minmax(82px, 1fr)); align-items: end; gap: 9px;
+  display: grid; grid-template-columns: 1.35fr repeat(8, minmax(82px, 1fr)); align-items: end; gap: 9px;
   margin: 18px 0; padding: 14px; border-radius: 15px; background: rgba(18, 22, 19, .48); border: 1px solid #5c675f;
 }
 .avatar-editor-title { align-self: center; }
@@ -139,6 +139,14 @@ canvas.webgl { position: fixed; inset: 0; display: block; z-index: 0; }
 #crosshair::before { width: 18px; height: 2px; top: 8px; }
 #crosshair::after { width: 2px; height: 18px; left: 8px; }
 #interactionHint { position: absolute; left: 50%; top: calc(50% + 25px); transform: translateX(-50%); padding: 5px 9px; border-radius: 7px; color: #fff; background: #0009; font-size: 13px; }
+
+#pointerLockHint {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: none; max-width: min(460px, 82vw); padding: 13px 18px; border-radius: 12px;
+  color: #fff; background: rgba(0,0,0,.82); border: 1px solid rgba(255,255,255,.28);
+  font-weight: 800; text-align: center; box-shadow: 0 12px 36px #0008;
+}
+#pointerLockHint.visible { display: block; }
 #toast { position: absolute; left: 50%; bottom: 42px; transform: translateX(-50%); padding: 9px 14px; border-radius: 9px; color: #fff; background: #000d; opacity: 0; transition: opacity .2s; }
 #toast.visible { opacity: 1; }
 
