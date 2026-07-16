@@ -4,7 +4,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 export const OPENING_KINDS = new Set(['door', 'window', 'slidingGate']);
 export const NETWORK_KINDS = new Set(['computer', 'laptop', 'printer', 'network', 'switch', 'router', 'rack', 'server']);
 export const SEGMENT_KINDS = new Set(['wall', 'road', 'sidewalk']);
-export const COLLIDABLE_KINDS = new Set(['wall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer']);
+export const COLLIDABLE_KINDS = new Set(['wall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer', 'car', 'motorcycle']);
 
 export const OBJECT_LABELS = {
   wall: 'Parede',
@@ -29,6 +29,9 @@ export const OBJECT_LABELS = {
   server: 'Servidor',
   cable: 'Cabo de rede',
   stairs: 'Escada',
+  spawnPoint: 'Ponto inicial do avatar',
+  car: 'Carro',
+  motorcycle: 'Moto',
 };
 
 export function objectLabel(kind) {
@@ -324,27 +327,48 @@ export function createDoor(position, options = {}) {
 function createWindowVisual(root) {
   clearChildren(root);
   const { width, height, depth } = root.userData.dimensions;
-  const frameThickness = Math.min(0.09, width * 0.09, height * 0.09);
+  const frameThickness = Math.min(0.085, width * 0.075, height * 0.075);
   const frameColor = root.userData.color || '#54504a';
+  const innerWidth = Math.max(0.08, width - frameThickness * 2);
+  const innerHeight = Math.max(0.08, height - frameThickness * 2);
   const parts = [
     [-width / 2 + frameThickness / 2, height / 2, frameThickness, height],
     [width / 2 - frameThickness / 2, height / 2, frameThickness, height],
-    [0, frameThickness / 2, Math.max(0.05, width - frameThickness * 2), frameThickness],
-    [0, height - frameThickness / 2, Math.max(0.05, width - frameThickness * 2), frameThickness],
+    [0, frameThickness / 2, innerWidth, frameThickness],
+    [0, height - frameThickness / 2, innerWidth, frameThickness],
+    [0, height / 2, frameThickness * 0.7, innerHeight],
   ];
   for (const [x, y, w, h] of parts) {
     const part = makeMesh(new THREE.BoxGeometry(w, h, depth), frameColor);
     part.position.set(x, y, 0);
     root.add(part);
   }
-  const glass = makeMesh(new THREE.BoxGeometry(Math.max(0.05, width - frameThickness * 2), Math.max(0.05, height - frameThickness * 2), Math.min(depth * 0.42, 0.045)), '#84c4df', {
+
+  const paneWidth = Math.max(0.05, innerWidth / 2 - frameThickness * 0.25);
+  const glassDepth = Math.min(Math.max(depth * 0.32, 0.018), 0.04);
+  const fixedPane = makeMesh(new THREE.BoxGeometry(paneWidth, innerHeight, glassDepth), '#84c4df', {
     transparent: true,
-    opacity: 0.38,
+    opacity: 0.36,
     roughness: 0.08,
+    castShadow: false,
+  });
+  fixedPane.userData.keepColor = true;
+  fixedPane.position.set(-innerWidth * 0.25, height / 2, depth * 0.12);
+  root.add(fixedPane);
+
+  const slidingPane = new THREE.Group();
+  slidingPane.position.set(innerWidth * 0.25, 0, -depth * 0.12);
+  const glass = makeMesh(new THREE.BoxGeometry(paneWidth, innerHeight, glassDepth), '#84c4df', {
+    transparent: true,
+    opacity: 0.42,
+    roughness: 0.06,
+    castShadow: false,
   });
   glass.userData.keepColor = true;
   glass.position.y = height / 2;
-  root.add(glass);
+  slidingPane.add(glass);
+  root.add(slidingPane);
+  root.userData.movingPart = slidingPane;
   markRoot(root);
 }
 
@@ -358,6 +382,9 @@ export function createWindow(position, options = {}) {
   root.userData.sillHeight = Number(options.sillHeight ?? 1.05);
   root.userData.hostWallId = options.hostWallId || '';
   root.userData.hostOffset = Number(options.hostOffset) || 0;
+  root.userData.open = Boolean(options.open);
+  root.userData.openTarget = root.userData.open ? 1 : 0;
+  root.userData.openProgress = root.userData.openTarget;
   root.position.copy(position);
   createWindowVisual(root);
   return root;
@@ -718,6 +745,127 @@ function createStairs(position, options = {}) {
   return root;
 }
 
+
+function createSpawnPoint(position, options = {}) {
+  const root = setupRoot(new THREE.Group(), 'spawnPoint', { ...options, color: options.color || '#f2d65c' });
+  root.userData.dimensions = { width: 1.1, height: 0.12, depth: 1.1 };
+  const ring = makeMesh(new THREE.RingGeometry(0.34, 0.52, 28), root.userData.color, { castShadow: false, receiveShadow: false, side: THREE.DoubleSide });
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.035;
+  root.add(ring);
+  const arrow = new THREE.Group();
+  const shaft = makeMesh(new THREE.BoxGeometry(0.12, 0.06, 0.72), '#fff3a8', { castShadow: false, receiveShadow: false });
+  shaft.userData.keepColor = true;
+  shaft.position.set(0, 0.075, -0.12);
+  arrow.add(shaft);
+  const tip = makeMesh(new THREE.ConeGeometry(0.23, 0.42, 3), '#fff3a8', { castShadow: false, receiveShadow: false });
+  tip.userData.keepColor = true;
+  tip.rotation.x = -Math.PI / 2;
+  tip.position.set(0, 0.075, -0.58);
+  arrow.add(tip);
+  root.add(arrow);
+  root.position.copy(position);
+  markRoot(root);
+  return root;
+}
+
+function createWheel(radius, width) {
+  const wheel = makeMesh(new THREE.CylinderGeometry(radius, radius, width, 12), '#1d2122', { metalness: 0.05 });
+  wheel.userData.keepColor = true;
+  wheel.rotation.z = Math.PI / 2;
+  return wheel;
+}
+
+function createCar(position, options = {}) {
+  const root = setupRoot(new THREE.Group(), 'car', { ...options, color: options.color || '#2d6fb7' });
+  root.userData.dimensions = { width: Number(options.width) || 1.82, height: Number(options.height) || 1.48, depth: Number(options.depth) || 4.15 };
+  const { width, height, depth } = root.userData.dimensions;
+  const lower = makeMesh(new THREE.BoxGeometry(width, 0.48, depth), root.userData.color, { metalness: 0.12, roughness: 0.45 });
+  lower.position.y = 0.56;
+  root.add(lower);
+  const hood = makeMesh(new THREE.BoxGeometry(width * 0.94, 0.26, depth * 0.31), root.userData.color, { metalness: 0.12, roughness: 0.45 });
+  hood.position.set(0, 0.88, -depth * 0.32);
+  root.add(hood);
+  const cabin = makeMesh(new THREE.BoxGeometry(width * 0.78, height * 0.48, depth * 0.43), '#b9d6e3', { transparent: true, opacity: 0.72, roughness: 0.12, castShadow: false });
+  cabin.userData.keepColor = true;
+  cabin.position.set(0, 1.08, depth * 0.03);
+  root.add(cabin);
+  const bumperFront = makeMesh(new THREE.BoxGeometry(width * 0.9, 0.13, 0.12), '#303638', { metalness: 0.35 });
+  bumperFront.userData.keepColor = true;
+  bumperFront.position.set(0, 0.46, -depth / 2 - 0.03);
+  root.add(bumperFront);
+  const bumperBack = bumperFront.clone();
+  bumperBack.material = bumperFront.material.clone();
+  bumperBack.position.z = depth / 2 + 0.03;
+  root.add(bumperBack);
+  for (const x of [-width * 0.31, width * 0.31]) {
+    for (const z of [-depth * 0.31, depth * 0.31]) {
+      const wheel = createWheel(0.34, 0.22);
+      wheel.position.set(x, 0.34, z);
+      root.add(wheel);
+      (root.userData.wheels ||= []).push(wheel);
+    }
+  }
+  for (const x of [-width * 0.29, width * 0.29]) {
+    const light = makeMesh(new THREE.BoxGeometry(0.28, 0.14, 0.05), '#fff2a8', { castShadow: false });
+    light.userData.keepColor = true;
+    light.position.set(x, 0.72, -depth / 2 - 0.035);
+    root.add(light);
+  }
+  root.userData.vehicle = { type: 'car', maxSpeed: 15, reverseMax: 5, acceleration: 8.5, brake: 18, drag: 2.3, steerRate: 1.75 };
+  root.userData.speed = 0;
+  root.userData.driverId = '';
+  root.position.copy(position);
+  markRoot(root);
+  return root;
+}
+
+function createMotorcycle(position, options = {}) {
+  const root = setupRoot(new THREE.Group(), 'motorcycle', { ...options, color: options.color || '#c74234' });
+  root.userData.dimensions = { width: Number(options.width) || 0.78, height: Number(options.height) || 1.35, depth: Number(options.depth) || 2.25 };
+  const { width, depth } = root.userData.dimensions;
+  const frame = makeMesh(new THREE.BoxGeometry(width * 0.55, 0.28, depth * 0.58), root.userData.color, { metalness: 0.15, roughness: 0.45 });
+  frame.position.set(0, 0.66, 0.04);
+  root.add(frame);
+  const tank = makeMesh(new THREE.SphereGeometry(0.34, 12, 8), root.userData.color, { metalness: 0.13, roughness: 0.42 });
+  tank.scale.set(1, 0.72, 1.35);
+  tank.position.set(0, 0.92, -0.28);
+  root.add(tank);
+  const seat = makeMesh(new THREE.BoxGeometry(width * 0.62, 0.16, depth * 0.48), '#25292a');
+  seat.userData.keepColor = true;
+  seat.position.set(0, 0.94, 0.42);
+  root.add(seat);
+  for (const z of [-depth * 0.38, depth * 0.38]) {
+    const wheel = createWheel(0.39, 0.12);
+    wheel.position.set(0, 0.4, z);
+    root.add(wheel);
+    (root.userData.wheels ||= []).push(wheel);
+  }
+  const fork = makeMesh(new THREE.BoxGeometry(0.07, 0.85, 0.07), '#60686b', { metalness: 0.45 });
+  fork.userData.keepColor = true;
+  fork.position.set(0, 0.83, -depth * 0.34);
+  fork.rotation.x = -0.18;
+  root.add(fork);
+  const handle = makeMesh(new THREE.BoxGeometry(width * 0.92, 0.06, 0.06), '#4e5658', { metalness: 0.4 });
+  handle.userData.keepColor = true;
+  handle.position.set(0, 1.28, -depth * 0.34);
+  root.add(handle);
+  root.userData.vehicle = { type: 'motorcycle', maxSpeed: 19, reverseMax: 3, acceleration: 10.5, brake: 20, drag: 2.1, steerRate: 2.15 };
+  root.userData.speed = 0;
+  root.userData.driverId = '';
+  root.position.copy(position);
+  markRoot(root);
+  return root;
+}
+
+export function updateVehicleAnimation(root, delta) {
+  if (!root?.userData?.vehicle) return;
+  const speed = Number(root.userData.speed) || 0;
+  const radius = root.userData.kind === 'motorcycle' ? 0.39 : 0.34;
+  const turn = (speed / Math.max(radius, 0.1)) * delta;
+  for (const wheel of root.userData.wheels || []) wheel.rotation.x -= turn;
+}
+
 export function createCable(fromRoot, toRoot, options = {}) {
   const root = setupRoot(new THREE.Group(), 'cable', { ...options, color: options.color || '#2f9e63' });
   root.userData.fromId = fromRoot?.userData?.objectId || options.fromId || '';
@@ -769,6 +917,9 @@ export function createObject(kind, position = new THREE.Vector3(), options = {})
   if (kind === 'rack') return createRack(position, options, 'rack');
   if (kind === 'server') return createRack(position, options, 'server');
   if (kind === 'stairs') return createStairs(position, options);
+  if (kind === 'spawnPoint') return createSpawnPoint(position, options);
+  if (kind === 'car') return createCar(position, options);
+  if (kind === 'motorcycle') return createMotorcycle(position, options);
   return null;
 }
 
@@ -857,7 +1008,8 @@ export function updateWallAttachments(wall, world) {
     const offset = THREE.MathUtils.clamp(Number(root.userData.hostOffset) || width / 2, width / 2, Math.max(width / 2, info.length - width / 2));
     root.userData.hostOffset = offset;
     const point = info.a.clone().add(info.tangent.clone().multiplyScalar(offset));
-    root.position.set(point.x, 0, point.y);
+    const baseY = root.userData.kind === 'window' ? Math.max(0, Number(root.userData.sillHeight) || 0) : 0;
+    root.position.set(point.x, baseY, point.y);
     root.rotation.set(0, info.angle, 0);
   }
 }
@@ -966,19 +1118,22 @@ export function snapshotSegment(root) {
 }
 
 export function setOpeningOpen(root, open) {
-  if (!OPENING_KINDS.has(root.userData.kind) || root.userData.kind === 'window') return;
+  if (!OPENING_KINDS.has(root.userData.kind)) return;
   root.userData.open = Boolean(open);
   root.userData.openTarget = root.userData.open ? 1 : 0;
 }
 
 export function updateOpeningAnimation(root, delta) {
-  if (!['door', 'slidingGate'].includes(root.userData.kind) || !root.userData.movingPart) return;
+  if (!['door', 'window', 'slidingGate'].includes(root.userData.kind) || !root.userData.movingPart) return;
   const current = Number(root.userData.openProgress) || 0;
   const target = Number(root.userData.openTarget) || 0;
   const next = THREE.MathUtils.damp(current, target, 8, delta);
   root.userData.openProgress = Math.abs(next - target) < 0.002 ? target : next;
   if (root.userData.kind === 'door') {
     root.userData.movingPart.rotation.y = -Math.PI * 0.5 * root.userData.openProgress;
+  } else if (root.userData.kind === 'window') {
+    const width = Number(root.userData.dimensions?.width) || 1.5;
+    root.userData.movingPart.position.x = width * 0.25 - width * 0.43 * root.userData.openProgress;
   } else {
     const width = Number(root.userData.dimensions?.width) || 3.6;
     root.userData.movingPart.position.x = root.userData.slideDirection * width * 0.92 * root.userData.openProgress;

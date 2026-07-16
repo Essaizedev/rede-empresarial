@@ -213,3 +213,13 @@ body.game-keyboard-captured canvas.webgl { outline: none; }
 @media (max-width: 820px) {
   #gameSettings { display: none; }
 }
+
+
+#vehicleHud {
+  left: 50%; bottom: 14px; transform: translateX(-50%); min-width: 260px;
+  display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;
+  text-align: center;
+}
+#vehicleHud.hidden { display: none; }
+#vehicleHud #vehicleSpeed { color: #f0dc75; font-size: 20px; font-weight: 900; }
+#vehicleHud small { flex-basis: 100%; color: #cbd5cd; }

@@ -41,6 +41,7 @@ import {
   snapshotSegment,
   updateAllCables,
   updateOpeningAnimation,
+  updateVehicleAnimation,
 } from './objects.js';
 import './style.css';
 
@@ -206,6 +207,9 @@ app.innerHTML = `
           <button data-tool="sidewalk">Calçada</button>
           <button data-add="parking">Vaga</button>
           <button data-add="grass">Área verde</button>
+          <button data-add="spawnPoint">Ponto inicial</button>
+          <button data-add="car">Carro</button>
+          <button data-add="motorcycle">Moto</button>
         </div>
       </div>
       <div class="tool-section" data-section="furniture">
@@ -374,7 +378,7 @@ app.innerHTML = `
   </section>
 
   <section id="gameUi" class="hidden">
-    <div id="gameControls" class="game-panel"><strong>Controles</strong><br>W, A, S, D: andar<br>Shift: correr<br>E ou clique: interagir<br>1: acenar · 2: apontar<br><small>O teclado fica dedicado ao jogo enquanto esta tela estiver ativa.</small></div>
+    <div id="gameControls" class="game-panel"><strong>Controles</strong><br>W, A, S, D: andar ou dirigir<br>Shift: correr · Espaço: frear veículo<br>E ou clique: interagir/entrar/sair<br>1: acenar · 2: apontar<br><small>O teclado fica dedicado ao jogo enquanto esta tela estiver ativa.</small></div>
     <div id="playersPanel" class="game-panel"><strong>Participantes</strong><ol id="playersList"></ol></div>
     <div id="gameSettings" class="game-panel">
       <strong>Gráficos</strong>
@@ -387,6 +391,7 @@ app.innerHTML = `
     <div id="pointerLockHint">Clique na tela para controlar o personagem</div>
     <div id="crosshair"></div>
     <div id="interactionHint"></div>
+    <div id="vehicleHud" class="game-panel hidden"><strong id="vehicleName">Veículo</strong><span id="vehicleSpeed">0 km/h</span><small>W/S acelerar e ré · A/D virar · Espaço frear · E sair</small></div>
     <div id="toast"></div>
   </section>
 
@@ -420,6 +425,9 @@ const toast = $('#toast');
 const interactionHint = $('#interactionHint');
 const pointerLockHint = $('#pointerLockHint');
 const exitGameButton = $('#exitGame');
+const vehicleHud = $('#vehicleHud');
+const vehicleName = $('#vehicleName');
+const vehicleSpeed = $('#vehicleSpeed');
 const joinButton = $('#joinRoomButton');
 const publishButton = $('#publishScene');
 
@@ -471,6 +479,7 @@ app.prepend(renderer.domElement);
 
 const gameCamera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.08, 260);
 gameCamera.position.set(16, 14, 19);
+scene.add(gameCamera);
 const topFrustum = 38;
 const topCamera = new THREE.OrthographicCamera(-topFrustum, topFrustum, topFrustum, -topFrustum, 0.1, 300);
 topCamera.position.set(0, 70, 0.01);
@@ -557,6 +566,82 @@ snapMarker.renderOrder = 45;
 snapMarker.visible = false;
 helperLayer.add(snapMarker);
 
+function createFirstPersonBody() {
+  const group = new THREE.Group();
+  group.name = 'first-person-body';
+  group.visible = false;
+  const material = (color) => new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false });
+  const make = (geometry, color) => {
+    const mesh = new THREE.Mesh(geometry, material(color));
+    mesh.renderOrder = 999;
+    return mesh;
+  };
+  const torso = make(new THREE.BoxGeometry(0.58, 0.38, 0.24), avatarConfig.shirt);
+  torso.position.set(0, -0.74, -0.48);
+  group.add(torso);
+  const leftArm = new THREE.Group();
+  leftArm.position.set(-0.36, -0.30, -0.57);
+  const leftSleeve = make(new THREE.BoxGeometry(0.17, 0.42, 0.18), avatarConfig.shirt);
+  leftSleeve.position.y = -0.18;
+  leftArm.add(leftSleeve);
+  const leftHand = make(new THREE.SphereGeometry(0.105, 9, 7), avatarConfig.skin);
+  leftHand.position.y = -0.43;
+  leftArm.add(leftHand);
+  group.add(leftArm);
+  const rightArm = leftArm.clone(true);
+  rightArm.position.x = 0.36;
+  for (const child of rightArm.children) child.material = child.material.clone();
+  group.add(rightArm);
+  group.userData = { torso, leftArm, rightArm };
+  gameCamera.add(group);
+  return group;
+}
+
+const firstPersonBody = createFirstPersonBody();
+
+function refreshFirstPersonAppearance() {
+  const rig = firstPersonBody.userData;
+  if (!rig) return;
+  rig.torso.material.color.set(avatarConfig.shirt);
+  rig.leftArm.children[0].material.color.set(avatarConfig.shirt);
+  rig.rightArm.children[0].material.color.set(avatarConfig.shirt);
+  rig.leftArm.children[1].material.color.set(avatarConfig.skin);
+  rig.rightArm.children[1].material.color.set(avatarConfig.skin);
+}
+
+function updateFirstPersonBody(delta, moving) {
+  if (!firstPersonBody.visible) return;
+  const rig = firstPersonBody.userData;
+  const bob = moving && !activeVehicle ? Math.sin(elapsed * 10) * 0.018 : 0;
+  firstPersonBody.position.y = bob;
+  rig.leftArm.rotation.set(0, 0, moving && !activeVehicle ? Math.sin(elapsed * 10) * 0.06 : 0.04);
+  rig.rightArm.rotation.set(0, 0, moving && !activeVehicle ? -Math.sin(elapsed * 10) * 0.06 : -0.04);
+  if (activeVehicle) {
+    rig.torso.visible = false;
+    rig.leftArm.position.set(-0.25, -0.32, -0.76);
+    rig.rightArm.position.set(0.25, -0.32, -0.76);
+    rig.leftArm.rotation.x = -1.05;
+    rig.rightArm.rotation.x = -1.05;
+  } else {
+    rig.torso.visible = true;
+    rig.leftArm.position.set(-0.36, -0.30, -0.57);
+    rig.rightArm.position.set(0.36, -0.30, -0.57);
+    rig.leftArm.rotation.x = 0;
+    rig.rightArm.rotation.x = 0;
+  }
+  if (firstPersonGestureUntil > performance.now()) {
+    if (firstPersonGesture === 'wave') {
+      rig.rightArm.position.set(0.33, -0.10, -0.65);
+      rig.rightArm.rotation.x = -1.45 + Math.sin(elapsed * 13) * 0.34;
+      rig.rightArm.rotation.z = -0.75;
+    } else if (firstPersonGesture === 'point') {
+      rig.rightArm.position.set(0.22, -0.18, -0.72);
+      rig.rightArm.rotation.x = -1.58;
+      rig.rightArm.rotation.z = -0.18;
+    }
+  }
+}
+
 let appMode = 'home';
 let builderView = 'top';
 let currentTool = 'select';
@@ -591,6 +676,9 @@ const centerPointer = new THREE.Vector2(0, 0);
 const clock = new THREE.Clock();
 let elapsed = 0;
 let lastRenderedAt = 0;
+let activeVehicle = null;
+let firstPersonGesture = '';
+let firstPersonGestureUntil = 0;
 
 const settings = {
   grid: Number($('#gridSize').value),
@@ -1374,13 +1462,19 @@ function createSegmentTool(kind, start, end) {
   const length = start.distanceTo(end);
   if (length < Math.max(0.3, settings.grid)) {
     setBuilderStatus('O segmento ficou pequeno demais. Tente novamente.');
-    return;
+    return null;
   }
   let root;
   if (kind === 'wall') root = createWall(start, end, { height: settings.wallHeight, thickness: settings.wallDepth, color: settings.wallColor, world });
   else if (kind === 'road') root = createRoad(start, end, { width: settings.roadWidth });
   else root = createSidewalk(start, end, { width: 1.5 });
-  addRoot(root, `${objectLabel(kind)} criada`);
+  world.add(root);
+  applyShadowFlagsToRoot(root);
+  if (kind === 'wall') rebuildWall(root, world);
+  clearSelection();
+  commitHistory(`${objectLabel(kind)} criada`);
+  refreshValidation();
+  return root;
 }
 
 function handleCableClick(root) {
@@ -1468,10 +1562,16 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       segmentStart = snapped.point;
       setBuilderStatus('Ponto inicial definido. Agora clique no ponto final. Esc cancela; F8 ativa o modo ortogonal.');
     } else {
-      createSegmentTool(currentTool, segmentStart, snapped.point);
-      segmentStart = null;
+      const created = createSegmentTool(currentTool, segmentStart, snapped.point);
       clearPreview();
-      setBuilderStatus(`${objectLabel(currentTool)} criada. Clique para iniciar outra.`);
+      if (created && currentTool === 'wall') {
+        segmentStart = snapped.point.clone();
+        clearSelection();
+        setBuilderStatus('Parede criada. Continue clicando para desenhar paredes conectadas. Pressione Esc para finalizar.');
+      } else {
+        segmentStart = null;
+        setBuilderStatus(`${objectLabel(currentTool)} criada. Clique para iniciar outra.`);
+      }
     }
     return;
   }
@@ -1490,6 +1590,10 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     showSnapMarker(point, snapped.reason);
     if (OPENING_KINDS.has(kind)) addOpening(kind, point);
     else {
+      if (kind === 'spawnPoint') {
+        const previous = world.children.filter((item) => item.userData.kind === 'spawnPoint');
+        if (previous.length) removeRoots(previous);
+      }
       const created = createObject(kind, point, {});
       if (created) addRoot(created, `${objectLabel(kind)} adicionado`);
     }
@@ -1661,6 +1765,9 @@ function leaveGame() {
   document.body.classList.remove('game-keyboard-captured');
   if (document.pointerLockElement) document.exitPointerLock?.();
   $('#equipmentModal').classList.remove('open');
+  if (activeVehicle) exitVehicle();
+  firstPersonBody.visible = false;
+  vehicleHud.classList.add('hidden');
   disconnectRealtime();
 
   if (returnToBuilder) {
@@ -1687,6 +1794,7 @@ function showHome() {
   grid.visible = true;
   referenceLayer.visible = true;
   helperLayer.visible = true;
+  setBuilderOnlyObjectsVisible(true);
   disconnectRealtime();
 }
 
@@ -1701,6 +1809,7 @@ function openBuilder() {
   grid.visible = $('#showGrid').checked;
   referenceLayer.visible = true;
   helperLayer.visible = true;
+  setBuilderOnlyObjectsVisible(true);
   setBuilderView(builderView);
   attachTransform();
   setTool('select');
@@ -1744,10 +1853,17 @@ function upsertRemote(player) {
     showToast(`${player.name || 'Uma pessoa'} entrou`);
   }
   applyAvatarState(avatar, player);
+  avatar.visible = !player.inVehicle;
   updatePlayersList();
 }
 
 function removeRemote(id) {
+  for (const vehicle of world.children) {
+    if (['car', 'motorcycle'].includes(vehicle.userData.kind) && vehicle.userData.driverId === id) {
+      vehicle.userData.driverId = '';
+      vehicle.userData.speed = 0;
+    }
+  }
   const avatar = remotePlayers.get(id);
   if (!avatar) return;
   avatarLayer.remove(avatar);
@@ -1792,6 +1908,116 @@ async function broadcast(event, payload) {
   await realtimeChannel.send({ type: 'broadcast', event, payload });
 }
 
+
+function getSpawnTransform({ randomize = false } = {}) {
+  const marker = world.children.find((root) => root.userData.kind === 'spawnPoint');
+  if (!marker) return { x: 0, z: 12, ry: 0 };
+  const spread = randomize ? 0.75 : 0;
+  const angle = Math.random() * Math.PI * 2;
+  return {
+    x: marker.position.x + Math.cos(angle) * spread,
+    z: marker.position.z + Math.sin(angle) * spread,
+    ry: marker.rotation.y,
+  };
+}
+
+function setBuilderOnlyObjectsVisible(visible) {
+  for (const root of world.children) if (root.userData.kind === 'spawnPoint') root.visible = visible && !root.userData.hidden;
+}
+
+function applyVehicleState(payload) {
+  if (!payload?.objectId) return;
+  const vehicle = world.children.find((root) => root.userData.objectId === payload.objectId && ['car', 'motorcycle'].includes(root.userData.kind));
+  if (!vehicle || vehicle === activeVehicle) return;
+  vehicle.position.set(Number(payload.x) || 0, 0, Number(payload.z) || 0);
+  vehicle.rotation.y = Number(payload.ry) || 0;
+  vehicle.userData.speed = Number(payload.speed) || 0;
+  vehicle.userData.driverId = payload.driverId || '';
+}
+
+function vehicleCollisionAt(vehicle, position) {
+  const original = vehicle.position.clone();
+  vehicle.position.copy(position);
+  vehicle.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(vehicle).expandByScalar(-0.08);
+  vehicle.position.copy(original);
+  vehicle.updateMatrixWorld(true);
+  for (const staticBox of staticCollisionBoxes) if (staticBox.intersectsBox(box)) return true;
+  for (const other of world.children) {
+    if (other === vehicle || !['car', 'motorcycle'].includes(other.userData.kind)) continue;
+    if (new THREE.Box3().setFromObject(other).intersectsBox(box)) return true;
+  }
+  return false;
+}
+
+function enterVehicle(vehicle) {
+  if (!vehicle || !['car', 'motorcycle'].includes(vehicle.userData.kind)) return;
+  if (vehicle.userData.driverId && vehicle.userData.driverId !== localPlayer?.id) {
+    showToast('Esse veículo já está sendo usado.');
+    return;
+  }
+  activeVehicle = vehicle;
+  vehicle.userData.driverId = localPlayer?.id || 'solo';
+  vehicle.userData.speed = Number(vehicle.userData.speed) || 0;
+  if (localPlayer) localPlayer = { ...localPlayer, inVehicle: vehicle.userData.objectId };
+  vehicleName.textContent = objectLabel(vehicle.userData.kind);
+  vehicleHud.classList.remove('hidden');
+  const seat = new THREE.Vector3(0, vehicle.userData.kind === 'motorcycle' ? 1.43 : 1.25, vehicle.userData.kind === 'motorcycle' ? 0.10 : -0.18);
+  vehicle.localToWorld(seat);
+  gameCamera.position.copy(seat);
+  gameCamera.rotation.set(0, vehicle.rotation.y, 0);
+  broadcast('vehicle_state', {
+    objectId: vehicle.userData.objectId, x: vehicle.position.x, z: vehicle.position.z,
+    ry: vehicle.rotation.y, speed: vehicle.userData.speed, driverId: vehicle.userData.driverId,
+  }).catch(() => {});
+  showToast(`Você entrou no ${objectLabel(vehicle.userData.kind).toLowerCase()}.`);
+}
+
+function exitVehicle() {
+  if (!activeVehicle) return;
+  const vehicle = activeVehicle;
+  const side = new THREE.Vector3(vehicle.userData.kind === 'motorcycle' ? 1.0 : 1.35, 0, 0).applyQuaternion(vehicle.quaternion);
+  let exitPosition = vehicle.position.clone().add(side);
+  exitPosition.y = 1.7;
+  if (collides(exitPosition)) exitPosition = vehicle.position.clone().sub(side).setY(1.7);
+  gameCamera.position.copy(exitPosition);
+  vehicle.userData.driverId = '';
+  vehicle.userData.speed = 0;
+  if (localPlayer) localPlayer = { ...localPlayer, inVehicle: '' };
+  broadcast('vehicle_state', {
+    objectId: vehicle.userData.objectId, x: vehicle.position.x, z: vehicle.position.z,
+    ry: vehicle.rotation.y, speed: 0, driverId: '',
+  }).catch(() => {});
+  activeVehicle = null;
+  vehicleHud.classList.add('hidden');
+  showToast('Você saiu do veículo.');
+}
+
+function updateDrivenVehicle(delta) {
+  if (!activeVehicle) return false;
+  const config = activeVehicle.userData.vehicle;
+  let speed = Number(activeVehicle.userData.speed) || 0;
+  const throttle = Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown'));
+  const steering = Number(keys.has('KeyA') || keys.has('ArrowLeft')) - Number(keys.has('KeyD') || keys.has('ArrowRight'));
+  if (throttle > 0) speed += config.acceleration * delta;
+  else if (throttle < 0) speed -= config.acceleration * 0.72 * delta;
+  else speed = THREE.MathUtils.damp(speed, 0, config.drag, delta);
+  if (keys.has('Space')) speed = THREE.MathUtils.damp(speed, 0, config.brake, delta);
+  speed = THREE.MathUtils.clamp(speed, -config.reverseMax, config.maxSpeed);
+  const steerStrength = config.steerRate * Math.min(1, Math.abs(speed) / 3.2);
+  activeVehicle.rotation.y += steering * steerStrength * delta * (speed >= 0 ? 1 : -1);
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(activeVehicle.quaternion);
+  const next = activeVehicle.position.clone().addScaledVector(forward, speed * delta);
+  if (!vehicleCollisionAt(activeVehicle, next)) activeVehicle.position.copy(next);
+  else speed = 0;
+  activeVehicle.userData.speed = speed;
+  const seat = new THREE.Vector3(0, activeVehicle.userData.kind === 'motorcycle' ? 1.43 : 1.25, activeVehicle.userData.kind === 'motorcycle' ? 0.10 : -0.18);
+  activeVehicle.localToWorld(seat);
+  gameCamera.position.copy(seat);
+  vehicleSpeed.textContent = `${Math.round(Math.abs(speed) * 3.6)} km/h`;
+  return Math.abs(speed) > 0.12;
+}
+
 function disconnectRealtime() {
   const oldChannel = realtimeChannel;
   realtimeChannel = null;
@@ -1827,17 +2053,17 @@ async function joinOnline(name, room) {
 
   localStorage.setItem('empresa3d-name', name);
   localStorage.setItem('empresa3d-room', room);
-  const spawnAngle = Math.random() * Math.PI * 2;
-  const spawnRadius = 1.4 + Math.random() * 2.2;
+  const spawn = getSpawnTransform({ randomize: true });
   localPlayer = {
     id: crypto.randomUUID(),
     name,
     avatar: avatarConfig,
-    x: Math.cos(spawnAngle) * spawnRadius,
-    z: 12 + Math.sin(spawnAngle) * spawnRadius,
-    ry: 0,
+    x: spawn.x,
+    z: spawn.z,
+    ry: spawn.ry,
     moving: false,
     gesture: '',
+    inVehicle: '',
   };
   currentRoom = room;
   realtimeChannel = supabase.channel(`empresa3d:${room}`, {
@@ -1854,6 +2080,7 @@ async function joinOnline(name, room) {
       if (localPlayer && payload?.requesterId !== localPlayer.id) broadcast('player_state', localPlayer).catch(() => {});
     })
     .on('broadcast', { event: 'gesture' }, ({ payload }) => upsertRemote(payload))
+    .on('broadcast', { event: 'vehicle_state' }, ({ payload }) => applyVehicleState(payload))
     .on('broadcast', { event: 'opening' }, ({ payload }) => {
       const opening = world.children.find((root) => root.userData.objectId === payload?.objectId);
       if (opening) setOpeningOpen(opening, Boolean(payload.open));
@@ -1923,16 +2150,22 @@ async function publishCurrentScene(room, pin) {
 function startSoloGame() {
   disconnectRealtime();
   gameReturnMode = 'builder';
-  localPlayer = { id: crypto.randomUUID(), name: 'Você', avatar: avatarConfig, x: 0, z: 12, ry: 0, moving: false };
+  const spawn = getSpawnTransform();
+  localPlayer = { id: crypto.randomUUID(), name: 'Você', avatar: avatarConfig, x: spawn.x, z: spawn.z, ry: spawn.ry, moving: false, gesture: '', inVehicle: '' };
   startGame();
 }
 
 function startGame() {
   for (const root of world.children) {
-    if (['door', 'slidingGate'].includes(root.userData.kind)) setOpeningOpen(root, false);
+    if (['door', 'window', 'slidingGate'].includes(root.userData.kind)) setOpeningOpen(root, false);
   }
   appMode = 'game';
   keys.clear();
+  activeVehicle = null;
+  vehicleHud.classList.add('hidden');
+  setBuilderOnlyObjectsVisible(false);
+  refreshFirstPersonAppearance();
+  firstPersonBody.visible = true;
   document.body.classList.add('game-keyboard-captured');
   homeOverlay.classList.add('hidden');
   builderUi.classList.add('hidden');
@@ -1974,7 +2207,7 @@ function rebuildGameCaches() {
       staticCollisionBoxes.push(new THREE.Box3().setFromObject(root));
     }
 
-    if (['door', 'slidingGate'].includes(kind) || NETWORK_KINDS.has(kind)) {
+    if (['door', 'window', 'slidingGate', 'car', 'motorcycle'].includes(kind) || NETWORK_KINDS.has(kind)) {
       root.traverse((child) => { if (child.isMesh) interactionMeshes.push(child); });
     }
   }
@@ -1989,10 +2222,19 @@ function collides(position) {
     const box = new THREE.Box3().setFromObject(root.userData.movingPart);
     if (box.intersectsBox(playerCollisionBox)) return true;
   }
+  for (const vehicle of world.children) {
+    if (vehicle === activeVehicle || !['car', 'motorcycle'].includes(vehicle.userData.kind)) continue;
+    if (new THREE.Box3().setFromObject(vehicle).intersectsBox(playerCollisionBox)) return true;
+  }
   return false;
 }
 
 function findGameInteraction() {
+  if (activeVehicle) {
+    interactionRoot = activeVehicle;
+    interactionHint.textContent = 'E: sair do veículo';
+    return;
+  }
   raycaster.setFromCamera(centerPointer, gameCamera);
   const hit = raycaster.intersectObjects(interactionMeshes, false).find((item) => item.distance <= 4.2);
   const root = hit?.object?.userData?.root || null;
@@ -2001,23 +2243,28 @@ function findGameInteraction() {
     interactionHint.textContent = '';
     return;
   }
-  if (['door', 'slidingGate'].includes(root.userData.kind)) interactionHint.textContent = `E: ${root.userData.open ? 'fechar' : 'abrir'} ${objectLabel(root.userData.kind).toLowerCase()}`;
+  if (['door', 'window', 'slidingGate'].includes(root.userData.kind)) interactionHint.textContent = `E: ${root.userData.open ? 'fechar' : 'abrir'} ${objectLabel(root.userData.kind).toLowerCase()}`;
+  else if (['car', 'motorcycle'].includes(root.userData.kind)) interactionHint.textContent = `E: dirigir ${objectLabel(root.userData.kind).toLowerCase()}`;
   else if (NETWORK_KINDS.has(root.userData.kind)) interactionHint.textContent = `E: consultar ${root.userData.meta?.name || objectLabel(root.userData.kind)}`;
   else interactionHint.textContent = '';
 }
 
 function gameInteraction() {
+  if (activeVehicle) { exitVehicle(); return; }
   const root = interactionRoot;
   if (!root) return;
-  if (['door', 'slidingGate'].includes(root.userData.kind)) {
+  if (['door', 'window', 'slidingGate'].includes(root.userData.kind)) {
     setOpeningOpen(root, !root.userData.open);
     broadcast('opening', { objectId: root.userData.objectId, open: root.userData.open }).catch(() => {});
-  } else if (NETWORK_KINDS.has(root.userData.kind)) openEquipment(root.userData.meta || {});
+  } else if (['car', 'motorcycle'].includes(root.userData.kind)) enterVehicle(root);
+  else if (NETWORK_KINDS.has(root.userData.kind)) openEquipment(root.userData.meta || {});
 }
 
 function sendGesture(type) {
   if (!localPlayer || appMode !== 'game') return;
   localPlayer = { ...localPlayer, gesture: type };
+  firstPersonGesture = type;
+  firstPersonGestureUntil = performance.now() + 1600;
   broadcast('gesture', localPlayer).catch(() => {});
   setTimeout(() => { if (localPlayer) localPlayer.gesture = ''; }, 1600);
 }
@@ -2049,6 +2296,7 @@ function initAvatarPreview() {
   for (const input of Object.values(avatarInputs)) input.addEventListener('input', () => {
     avatarConfig = sanitizeAvatar(Object.fromEntries(Object.entries(avatarInputs).map(([key, element]) => [key, element.value])));
     localStorage.setItem('empresa3d-avatar', JSON.stringify(avatarConfig));
+    refreshFirstPersonAppearance();
     update();
   });
 
@@ -2325,23 +2573,29 @@ function animate() {
     }
     const forward = Number(keys.has('KeyW')) - Number(keys.has('KeyS'));
     const side = Number(keys.has('KeyD')) - Number(keys.has('KeyA'));
-    const moving = Boolean(forward || side);
-    if (pointerControls.isLocked && moving) {
-      const direction = new THREE.Vector3();
-      gameCamera.getWorldDirection(direction);
-      direction.y = 0;
-      direction.normalize();
-      const right = new THREE.Vector3().crossVectors(direction, new THREE.Vector3(0, 1, 0)).normalize();
-      const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6.4 : 4.2;
-      const movement = direction.multiplyScalar(forward).add(right.multiplyScalar(side)).normalize().multiplyScalar(speed * delta);
-      const nextX = gameCamera.position.clone();
-      nextX.x += movement.x;
-      if (!collides(nextX)) gameCamera.position.x = nextX.x;
-      const nextZ = gameCamera.position.clone();
-      nextZ.z += movement.z;
-      if (!collides(nextZ)) gameCamera.position.z = nextZ.z;
-      gameCamera.position.y = 1.7;
+    let moving = false;
+    if (activeVehicle) {
+      moving = updateDrivenVehicle(delta);
+    } else {
+      moving = Boolean(forward || side);
+      if (pointerControls.isLocked && moving) {
+        const direction = new THREE.Vector3();
+        gameCamera.getWorldDirection(direction);
+        direction.y = 0;
+        direction.normalize();
+        const right = new THREE.Vector3().crossVectors(direction, new THREE.Vector3(0, 1, 0)).normalize();
+        const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6.4 : 4.2;
+        const movement = direction.multiplyScalar(forward).add(right.multiplyScalar(side)).normalize().multiplyScalar(speed * delta);
+        const nextX = gameCamera.position.clone();
+        nextX.x += movement.x;
+        if (!collides(nextX)) gameCamera.position.x = nextX.x;
+        const nextZ = gameCamera.position.clone();
+        nextZ.z += movement.z;
+        if (!collides(nextZ)) gameCamera.position.z = nextZ.z;
+        gameCamera.position.y = 1.7;
+      }
     }
+    updateFirstPersonBody(delta, moving);
 
     const now = performance.now();
     const moveSendInterval = settings.quality === 'low' ? 110 : settings.quality === 'medium' ? 90 : 70;
@@ -2350,12 +2604,23 @@ function animate() {
       gameCamera.getWorldDirection(look);
       localPlayer = {
         ...localPlayer,
-        x: gameCamera.position.x,
-        z: gameCamera.position.z,
-        ry: Math.atan2(look.x, look.z),
+        x: activeVehicle ? activeVehicle.position.x : gameCamera.position.x,
+        z: activeVehicle ? activeVehicle.position.z : gameCamera.position.z,
+        ry: activeVehicle ? activeVehicle.rotation.y : Math.atan2(look.x, look.z),
         moving,
+        inVehicle: activeVehicle?.userData.objectId || '',
       };
       broadcast('player_move', localPlayer).catch(() => {});
+      if (activeVehicle) {
+        broadcast('vehicle_state', {
+          objectId: activeVehicle.userData.objectId,
+          x: activeVehicle.position.x,
+          z: activeVehicle.position.z,
+          ry: activeVehicle.rotation.y,
+          speed: activeVehicle.userData.speed,
+          driverId: localPlayer.id,
+        }).catch(() => {});
+      }
       lastMoveSent = now;
       if (now - lastPresenceSent > 1700) {
         realtimeChannel.track(localPlayer).catch(() => {});
@@ -2364,7 +2629,10 @@ function animate() {
     }
   }
 
-  for (const root of world.children) updateOpeningAnimation(root, delta);
+  for (const root of world.children) {
+    updateOpeningAnimation(root, delta);
+    updateVehicleAnimation(root, delta);
+  }
   for (const avatar of remotePlayers.values()) {
     avatar.position.lerp(avatar.userData.targetPosition, 1 - Math.exp(-delta * 12));
     let difference = avatar.userData.targetRotation - avatar.rotation.y;

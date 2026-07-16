@@ -1,0 +1,10 @@
+EMPRESA 3D INTELIGENTE V5
+
+- Janela encaixa na altura correta do vão e pode ser aberta/fechada.
+- Ponto inicial do avatar selecionável no construtor.
+- Braços, mãos e parte do tronco visíveis em primeira pessoa.
+- Acenar e apontar aparecem também para quem executou o gesto.
+- Carros e motos low-poly dirigíveis com aceleração, ré, direção, freio, entrada e saída.
+- Estado dos veículos sincronizado no multiplayer.
+- Parede deixa de ficar selecionada após a criação.
+- Desenho contínuo de paredes conectadas; Esc encerra a sequência.
