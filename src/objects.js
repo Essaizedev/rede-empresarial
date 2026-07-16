@@ -1,14 +1,15 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
-export const OPENING_KINDS = new Set(['door', 'window', 'slidingGate']);
+export const OPENING_KINDS = new Set(['door', 'window', 'glassPanel', 'slidingGate']);
 export const NETWORK_KINDS = new Set(['computer', 'laptop', 'printer', 'network', 'switch', 'router', 'rack', 'server', 'documentationTerminal']);
 export const SEGMENT_KINDS = new Set(['wall', 'glassWall', 'road', 'sidewalk']);
-export const COLLIDABLE_KINDS = new Set(['wall', 'glassWall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer', 'documentationTerminal', 'television', 'car', 'motorcycle']);
+export const COLLIDABLE_KINDS = new Set(['wall', 'glassWall', 'glassPanel', 'door', 'slidingGate', 'roof', 'carport', 'table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer', 'documentationTerminal', 'television', 'car', 'motorcycle']);
 
 export const OBJECT_LABELS = {
   wall: 'Parede',
-  glassWall: 'Parede de vidro',
+  glassWall: 'Parede de vidro (legado)',
+  glassPanel: 'Vidraçaria',
   door: 'Porta',
   window: 'Janela',
   slidingGate: 'Portão deslizante',
@@ -17,6 +18,8 @@ export const OBJECT_LABELS = {
   parking: 'Vaga de estacionamento',
   grass: 'Área verde',
   floorSlab: 'Piso/Laje',
+  roof: 'Teto/Cobertura',
+  carport: 'Alpendre para estacionamento',
   table: 'Mesa',
   chair: 'Cadeira',
   cabinet: 'Armário',
@@ -249,6 +252,51 @@ export function rebuildGlassWall(root) {
   markRoot(root);
 }
 
+function createGlassPanelVisual(root) {
+  clearChildren(root);
+  const { width, height, depth } = root.userData.dimensions;
+  const panelDepth = Math.min(Math.max(depth * 0.22, 0.018), 0.045);
+
+  // A vidraçaria ocupa o vão da parede sem caixilho: apenas a lâmina de vidro.
+  const glass = makeMesh(
+    new THREE.BoxGeometry(width, height, panelDepth),
+    root.userData.color || '#8fd7ef',
+    {
+      transparent: true,
+      opacity: 0.32,
+      roughness: 0.035,
+      metalness: 0.02,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      castShadow: false,
+      receiveShadow: false,
+    },
+  );
+  glass.position.y = height / 2;
+  glass.name = 'glass-panel';
+  root.add(glass);
+
+  root.userData.collisionPieces = [{
+    center: [0, height / 2, 0],
+    size: [width, height, Math.max(panelDepth, 0.055)],
+  }];
+  markRoot(root);
+}
+
+export function createGlassPanel(position, options = {}) {
+  const root = setupRoot(new THREE.Group(), 'glassPanel', { ...options, color: options.color || '#8fd7ef' });
+  root.userData.dimensions = {
+    width: Math.max(0.25, Number(options.width) || 2.4),
+    height: Math.max(0.25, Number(options.height) || 2.6),
+    depth: Math.max(0.05, Number(options.depth) || 0.16),
+  };
+  root.userData.hostWallId = options.hostWallId || '';
+  root.userData.hostOffset = Number(options.hostOffset) || 0;
+  root.position.copy(position);
+  createGlassPanelVisual(root);
+  return root;
+}
+
 function wallPieceGeometry(root, geometries, x, width, y, height) {
   if (width < 0.015 || height < 0.015) return;
   const thickness = root.userData.segment.thickness;
@@ -284,7 +332,7 @@ export function rebuildWall(root, world = null) {
           kind: item.userData.kind,
           min: Math.max(0, offset - width / 2),
           max: Math.min(info.length, offset + width / 2),
-          openingHeight: Number(item.userData.dimensions?.height) || (item.userData.kind === 'window' ? 1.1 : 2.15),
+          openingHeight: Number(item.userData.dimensions?.height) || (item.userData.kind === 'window' ? 1.1 : item.userData.kind === 'glassPanel' ? height : 2.15),
           sill: item.userData.kind === 'window' ? Number(item.userData.sillHeight ?? 1.05) : 0,
         };
       })
@@ -923,6 +971,10 @@ function rebuildFloorSlab(root) {
   slab.position.y = height / 2;
   slab.name = 'floor-slab';
   root.add(slab);
+  root.userData.collisionPieces = [{
+    center: [0, height / 2, 0],
+    size: [width, height, depth],
+  }];
   markRoot(root);
 }
 
@@ -938,15 +990,139 @@ function createFloorSlab(position, options = {}) {
   return root;
 }
 
+
+function rebuildRoof(root) {
+  clearChildren(root);
+  const dimensions = root.userData.dimensions || { width: 4, height: 0.16, depth: 4 };
+  const width = Math.max(0.3, Number(dimensions.width) || 4);
+  const height = Math.max(0.04, Number(dimensions.height) || 0.16);
+  const depth = Math.max(0.3, Number(dimensions.depth) || 4);
+  root.userData.dimensions = { width, height, depth };
+
+  const panel = makeMesh(
+    new THREE.BoxGeometry(width, height, depth),
+    root.userData.color || '#dedbd2',
+    { roughness: 0.86, metalness: 0.02, castShadow: true, receiveShadow: true },
+  );
+  panel.position.y = height / 2;
+  panel.name = 'roof-panel';
+  root.add(panel);
+
+  // A borda inferior ajuda a visualizar o teto na vista 3D sem tornar o
+  // objeto pesado. A posição Y do root representa a face inferior.
+  const trimMaterialColor = new THREE.Color(root.userData.color || '#dedbd2').multiplyScalar(0.82);
+  const trim = makeMesh(
+    new THREE.BoxGeometry(width + 0.04, 0.045, depth + 0.04),
+    `#${trimMaterialColor.getHexString()}`,
+    { roughness: 0.8, castShadow: false, receiveShadow: true },
+  );
+  trim.userData.keepColor = true;
+  trim.position.y = 0.0225;
+  root.add(trim);
+
+  root.userData.collisionPieces = [{
+    center: [0, height / 2, 0],
+    size: [width, height, depth],
+  }];
+  markRoot(root);
+}
+
+function createRoof(position, options = {}) {
+  const root = setupRoot(new THREE.Group(), 'roof', { ...options, color: options.color || '#dedbd2' });
+  root.userData.dimensions = {
+    width: Number(options.width) || 4,
+    height: Number(options.height) || 0.16,
+    depth: Number(options.depth) || 4,
+  };
+  root.position.copy(position);
+  rebuildRoof(root);
+  return root;
+}
+
+function rebuildCarport(root) {
+  clearChildren(root);
+  const dimensions = root.userData.dimensions || { width: 5.5, height: 2.7, depth: 5.2 };
+  const width = Math.max(1.8, Number(dimensions.width) || 5.5);
+  const height = Math.max(1.8, Number(dimensions.height) || 2.7);
+  const depth = Math.max(2.2, Number(dimensions.depth) || 5.2);
+  const post = THREE.MathUtils.clamp(Math.min(width, depth) * 0.035, 0.10, 0.20);
+  const roofThickness = THREE.MathUtils.clamp(Math.min(width, depth) * 0.035, 0.10, 0.22);
+  root.userData.dimensions = { width, height, depth };
+
+  const roof = makeMesh(
+    new THREE.BoxGeometry(width, roofThickness, depth),
+    root.userData.color || '#8f999d',
+    { roughness: 0.58, metalness: 0.18, castShadow: true, receiveShadow: true },
+  );
+  roof.position.y = height + roofThickness / 2;
+  roof.name = 'carport-roof';
+  root.add(roof);
+
+  const beamColor = new THREE.Color(root.userData.color || '#8f999d').multiplyScalar(0.72);
+  const collisionPieces = [{
+    center: [0, height + roofThickness / 2, 0],
+    size: [width, roofThickness, depth],
+  }];
+  const insetX = Math.max(post / 2, width / 2 - post * 0.8);
+  const insetZ = Math.max(post / 2, depth / 2 - post * 0.8);
+  for (const x of [-insetX, insetX]) {
+    for (const z of [-insetZ, insetZ]) {
+      const pillar = makeMesh(
+        new THREE.BoxGeometry(post, height, post),
+        `#${beamColor.getHexString()}`,
+        { roughness: 0.62, metalness: 0.22, castShadow: true, receiveShadow: true },
+      );
+      pillar.userData.keepColor = true;
+      pillar.position.set(x, height / 2, z);
+      root.add(pillar);
+      collisionPieces.push({ center: [x, height / 2, z], size: [post, height, post] });
+    }
+  }
+
+  // Vigas laterais leves deixam o alpendre mais realista sem fechar a passagem.
+  for (const z of [-insetZ, insetZ]) {
+    const beam = makeMesh(
+      new THREE.BoxGeometry(width, post * 0.72, post),
+      `#${beamColor.getHexString()}`,
+      { roughness: 0.62, metalness: 0.22, castShadow: true, receiveShadow: true },
+    );
+    beam.userData.keepColor = true;
+    beam.position.set(0, height - post * 0.36, z);
+    root.add(beam);
+  }
+
+  root.userData.collisionPieces = collisionPieces;
+  markRoot(root);
+}
+
+function createCarport(position, options = {}) {
+  const root = setupRoot(new THREE.Group(), 'carport', { ...options, color: options.color || '#8f999d' });
+  root.userData.dimensions = {
+    width: Number(options.width) || 5.5,
+    height: Number(options.height) || 2.7,
+    depth: Number(options.depth) || 5.2,
+  };
+  root.position.copy(position);
+  rebuildCarport(root);
+  return root;
+}
+
 function createStairs(position, options = {}) {
   const root = setupRoot(new THREE.Group(), 'stairs', { ...options, color: options.color || '#989891' });
   const steps = Number(options.steps) || 9;
   root.userData.dimensions = { width: Number(options.width) || 1.6, height: Number(options.height) || 1.62, depth: Number(options.depth) || steps * 0.38 };
+  root.userData.collisionPieces = [];
   for (let index = 0; index < steps; index += 1) {
     const stepHeight = (index + 1) * (root.userData.dimensions.height / steps);
-    const step = makeMesh(new THREE.BoxGeometry(root.userData.dimensions.width, stepHeight, root.userData.dimensions.depth / steps), root.userData.color);
-    step.position.set(0, stepHeight / 2, -index * root.userData.dimensions.depth / steps);
+    const stepDepth = root.userData.dimensions.depth / steps;
+    const z = -index * stepDepth;
+    const step = makeMesh(new THREE.BoxGeometry(root.userData.dimensions.width, stepHeight, stepDepth), root.userData.color);
+    step.position.set(0, stepHeight / 2, z);
     root.add(step);
+    root.userData.collisionPieces.push({
+      center: [0, stepHeight / 2, z],
+      size: [root.userData.dimensions.width, stepHeight, stepDepth],
+    });
   }
   root.position.copy(position);
   markRoot(root);
@@ -1117,10 +1293,13 @@ export function createObject(kind, position = new THREE.Vector3(), options = {})
   }
   if (kind === 'door') return createDoor(position, options);
   if (kind === 'window') return createWindow(position, options);
+  if (kind === 'glassPanel') return createGlassPanel(position, options);
   if (kind === 'slidingGate') return createSlidingGate(position, options);
   if (kind === 'parking') return createParking(position, options);
   if (kind === 'grass') return createGrass(position, options);
   if (kind === 'floorSlab') return createFloorSlab(position, options);
+  if (kind === 'roof') return createRoof(position, options);
+  if (kind === 'carport') return createCarport(position, options);
   if (kind === 'table') return createTable(position, options);
   if (kind === 'chair') return createChair(position, options);
   if (kind === 'cabinet') return createCabinet(position, options);
@@ -1199,6 +1378,7 @@ export function findFreeWallOffset(wall, world, desiredOffset, width, ignoreId =
 function refreshOpeningVisual(root) {
   if (root.userData.kind === 'door') createDoorVisual(root);
   else if (root.userData.kind === 'window') createWindowVisual(root);
+  else if (root.userData.kind === 'glassPanel') createGlassPanelVisual(root);
   else if (root.userData.kind === 'slidingGate') createSlidingGateVisual(root);
 }
 
@@ -1322,6 +1502,18 @@ export function resizeObject(root, dimensions, world = null) {
     return { width, height, depth };
   }
 
+  if (kind === 'roof') {
+    root.userData.dimensions = { width, height, depth };
+    rebuildRoof(root);
+    return { width, height, depth };
+  }
+
+  if (kind === 'carport') {
+    root.userData.dimensions = { width, height, depth };
+    rebuildCarport(root);
+    return { width, height, depth };
+  }
+
   if (kind === 'road' || kind === 'sidewalk') {
     const info = getSegmentInfo(root);
     const center = info.center;
@@ -1360,6 +1552,7 @@ export function resizeObject(root, dimensions, world = null) {
   root.userData.dimensions = { width, height, depth };
   if (kind === 'door') createDoorVisual(root);
   else if (kind === 'window') createWindowVisual(root);
+  else if (kind === 'glassPanel') createGlassPanelVisual(root);
   else if (kind === 'slidingGate') createSlidingGateVisual(root);
   else {
     root.scale.x *= width / Math.max(0.001, previous.width || 1);
@@ -1499,7 +1692,7 @@ export function createObjectFromData(data, world = null) {
   } else if (data.kind === 'cable') {
     root = createCable(null, null, { ...common, fromId: data.fromId, toId: data.toId });
   } else {
-    const creationOptions = OPENING_KINDS.has(data.kind) || data.kind === 'floorSlab'
+    const creationOptions = OPENING_KINDS.has(data.kind) || ['floorSlab', 'roof', 'carport'].includes(data.kind)
       ? { ...common, ...dimensions }
       : common;
     root = createObject(data.kind, position, creationOptions);
@@ -1508,10 +1701,12 @@ export function createObjectFromData(data, world = null) {
   if (!SEGMENT_KINDS.has(data.kind) && data.kind !== 'cable') {
     root.position.fromArray(data.position || [0, 0, 0]);
     root.rotation.set(...(data.rotation || [0, 0, 0]));
-    if (OPENING_KINDS.has(data.kind) || data.kind === 'floorSlab') root.scale.set(1, 1, 1);
+    if (OPENING_KINDS.has(data.kind) || ['floorSlab', 'roof', 'carport'].includes(data.kind)) root.scale.set(1, 1, 1);
     else root.scale.fromArray(data.scale || [1, 1, 1]);
     if (data.dimensions) root.userData.dimensions = { ...data.dimensions };
     if (data.kind === 'floorSlab') rebuildFloorSlab(root);
+    if (data.kind === 'roof') rebuildRoof(root);
+    if (data.kind === 'carport') rebuildCarport(root);
   }
   root.userData.meta = copyMeta(data.kind, data.meta);
   root.userData.locked = Boolean(data.locked);

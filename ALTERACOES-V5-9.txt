@@ -1,0 +1,13 @@
+VERSÃO V5.9 — TETO, ALPENDRE E FÍSICA VERTICAL
+
+- Adicionado Teto/Cobertura horizontal com largura, comprimento, espessura, altura inferior e cor.
+- Adicionado Alpendre para estacionamento com cobertura, vigas e quatro pilares.
+- Carros, motos e avatares colidem com os pilares e com coberturas na altura correta.
+- O topo do teto possui superfície física e pode receber o personagem em uma queda.
+- Gravidade contínua substitui a queda instantânea entre pavimentos.
+- Varredura vertical em pequenos passos impede atravessar paredes, tetos, objetos e o solo.
+- Recuperação automática tira o personagem de dentro de sólidos sem reiniciar a simulação.
+- Ao sair de um veículo, a velocidade vertical e o ponto seguro são restaurados.
+
+ATUALIZAÇÃO RÁPIDA
+Substitua src/main.js e src/objects.js no GitHub e aguarde o deploy da Vercel.

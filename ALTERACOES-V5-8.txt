@@ -1,0 +1,12 @@
+VIDRAÇARIA ENCAIXADA NA PAREDE
+
+- A ferramenta Vidraçaria deixou de criar uma parede de vidro independente.
+- Agora ela é colocada clicando perto de uma parede, como porta e janela.
+- O sistema abre um vão real na parede no tamanho exato do vidro.
+- A vidraçaria acompanha automaticamente posição, rotação, altura e espessura da parede.
+- Ao mover ou redimensionar, ela continua presa à parede e procura espaço livre.
+- Não pode sobrepor porta, janela, portão ou outra vidraçaria.
+- O vidro possui colisão durante a simulação, então pessoas, carros e motos não o atravessam.
+- Projetos antigos com Parede de vidro continuam carregando para não perder construções anteriores.
+
+Atualização rápida: substitua src/main.js e src/objects.js.

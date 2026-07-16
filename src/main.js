@@ -204,12 +204,13 @@ app.innerHTML = `
           <button data-tool="select" class="active">Selecionar</button>
           <button data-tool="windowSelect">Seleção em área</button>
           <button data-tool="wall">Parede</button>
-          <button data-tool="glassWall">Vidraçaria</button>
+          <button data-add="glassPanel">Vidraçaria</button>
           <button data-tool="paint">Pintar parede</button>
           <button data-add="door">Porta</button>
           <button data-add="window">Janela</button>
           <button data-add="slidingGate">Portão</button>
           <button data-add="floorSlab">Piso/Laje</button>
+          <button data-add="roof">Teto/Cobertura</button>
           <button data-add="stairs">Escada</button>
         </div>
       </div>
@@ -222,6 +223,7 @@ app.innerHTML = `
           <button data-add="spawnPoint">Ponto inicial</button>
           <button data-add="car">Carro</button>
           <button data-add="motorcycle">Moto</button>
+          <button data-add="carport">Alpendre</button>
         </div>
       </div>
       <div class="tool-section" data-section="furniture">
@@ -265,10 +267,11 @@ app.innerHTML = `
           <label>Espessura<input id="wallDepthDefault" type="number" value="0.16" min="0.08" max="0.6" step="0.01" /></label>
         </div>
         <div class="field-row">
-          <label>Altura do vidro<input id="glassHeightDefault" type="number" value="3" min="0.5" max="8" step="0.05" /></label>
-          <label>Espessura do vidro<input id="glassDepthDefault" type="number" value="0.035" min="0.018" max="0.12" step="0.005" /></label>
+          <label>Largura da vidraçaria<input id="glassWidthDefault" type="number" value="2.40" min="0.25" max="20" step="0.05" /></label>
+          <label>Altura do vidro<input id="glassHeightDefault" type="number" value="2.60" min="0.25" max="8" step="0.05" /></label>
         </div>
         <div class="field"><label>Cor do vidro<input id="glassColorDefault" type="color" value="#8fd7ef" /></label></div>
+        <p class="help-text">A vidraçaria abre um vão real e acompanha automaticamente a espessura, a posição e a rotação da parede.</p>
         <div class="floor-defaults">
           <strong>Piso/Laje horizontal</strong>
           <div class="field-row">
@@ -281,6 +284,31 @@ app.innerHTML = `
           </div>
           <div class="field"><label>Cor do piso<input id="floorColorDefault" type="color" value="#c9c6bb" /></label></div>
           <p class="help-text">Para criar patamares e pavimentos, altere a elevação. A face superior será caminhável no teste.</p>
+        </div>
+        <div class="floor-defaults">
+          <strong>Teto/Cobertura horizontal</strong>
+          <div class="field-row">
+            <label>Largura<input id="roofWidthDefault" type="number" value="4" min="0.3" max="80" step="0.1" /></label>
+            <label>Comprimento<input id="roofDepthDefault" type="number" value="4" min="0.3" max="80" step="0.1" /></label>
+          </div>
+          <div class="field-row">
+            <label>Espessura<input id="roofThicknessDefault" type="number" value="0.16" min="0.04" max="1" step="0.01" /></label>
+            <label>Altura inferior<input id="roofElevationDefault" type="number" value="3" min="1.8" max="30" step="0.05" /></label>
+          </div>
+          <div class="field"><label>Cor do teto<input id="roofColorDefault" type="color" value="#dedbd2" /></label></div>
+          <p class="help-text">A altura inferior é a distância do piso até a parte de baixo do teto. O topo também possui física.</p>
+        </div>
+        <div class="floor-defaults">
+          <strong>Alpendre do estacionamento</strong>
+          <div class="field-row">
+            <label>Largura<input id="carportWidthDefault" type="number" value="5.5" min="1.8" max="30" step="0.1" /></label>
+            <label>Comprimento<input id="carportDepthDefault" type="number" value="5.2" min="2.2" max="30" step="0.1" /></label>
+          </div>
+          <div class="field-row">
+            <label>Altura livre<input id="carportHeightDefault" type="number" value="2.7" min="1.8" max="8" step="0.05" /></label>
+            <label>Cor<input id="carportColorDefault" type="color" value="#8f999d" /></label>
+          </div>
+          <p class="help-text">Cria uma cobertura leve com quatro pilares. Carros e motos passam por baixo e colidem com os pilares.</p>
         </div>
         <div class="field"><label>Cor das novas paredes<input id="wallColorDefault" type="color" value="#cfc6a2" /></label></div>
         <div class="color-swatches" aria-label="Cores rápidas para paredes">
@@ -937,6 +965,9 @@ let worldSource = 'personal';
 let personalProjectInitialized = false;
 let personalAutosaveTimer = null;
 let walkableRoots = [];
+let verticalVelocity = 0;
+let playerGrounded = true;
+const lastSafePlayerPosition = new THREE.Vector3();
 const PERSONAL_PROJECT_KEY = 'empresa3d-personal-project-v3';
 const PERSONAL_VERSIONS_KEY = 'empresa3d-personal-versions-v3';
 
@@ -949,14 +980,23 @@ const settings = {
   wallHeight: Number($('#wallHeightDefault').value),
   wallDepth: Number($('#wallDepthDefault').value),
   wallColor: $('#wallColorDefault').value,
+  glassWidth: Number($('#glassWidthDefault').value),
   glassHeight: Number($('#glassHeightDefault').value),
-  glassDepth: Number($('#glassDepthDefault').value),
   glassColor: $('#glassColorDefault').value,
   floorWidth: Number($('#floorWidthDefault').value),
   floorDepth: Number($('#floorDepthDefault').value),
   floorThickness: Number($('#floorThicknessDefault').value),
   floorElevation: Number($('#floorElevationDefault').value),
   floorColor: $('#floorColorDefault').value,
+  roofWidth: Number($('#roofWidthDefault').value),
+  roofDepth: Number($('#roofDepthDefault').value),
+  roofThickness: Number($('#roofThicknessDefault').value),
+  roofElevation: Number($('#roofElevationDefault').value),
+  roofColor: $('#roofColorDefault').value,
+  carportWidth: Number($('#carportWidthDefault').value),
+  carportDepth: Number($('#carportDepthDefault').value),
+  carportHeight: Number($('#carportHeightDefault').value),
+  carportColor: $('#carportColorDefault').value,
   roadWidth: Number($('#roadWidthDefault').value),
   doorWidth: Number($('#doorWidthDefault').value),
   doorHeight: Number($('#doorHeightDefault').value),
@@ -976,7 +1016,7 @@ const QUALITY_PROFILES = {
   high: { pixelRatio: 1.5, shadowSize: 2048, renderInterval: 0, fogFar: 190 },
 };
 
-const SHADOW_KINDS = new Set(['wall', 'door', 'slidingGate', 'table', 'chair', 'cabinet', 'shelf', 'rack', 'server', 'documentationTerminal', 'television', 'stairs']);
+const SHADOW_KINDS = new Set(['wall', 'door', 'slidingGate', 'roof', 'carport', 'table', 'chair', 'cabinet', 'shelf', 'rack', 'server', 'documentationTerminal', 'television', 'stairs']);
 function shadowEligible(root) {
   return SHADOW_KINDS.has(root?.userData?.kind);
 }
@@ -1946,7 +1986,7 @@ function showSegmentPreview(start, end, kind, reason = '') {
   const width = kind === 'wall'
     ? settings.wallDepth
     : kind === 'glassWall'
-      ? settings.glassDepth
+      ? 0.035
       : kind === 'road'
         ? settings.roadWidth
         : 1.5;
@@ -1992,6 +2032,7 @@ function setTool(tool) {
 function openingDefaults(kind) {
   if (kind === 'door') return { width: settings.doorWidth, height: settings.doorHeight };
   if (kind === 'window') return { width: settings.windowWidth, height: settings.windowHeight };
+  if (kind === 'glassPanel') return { width: settings.glassWidth, height: settings.glassHeight, color: settings.glassColor };
   if (kind === 'slidingGate') return { width: settings.gateWidth, height: settings.gateHeight };
   return {};
 }
@@ -2020,7 +2061,7 @@ function createSegmentTool(kind, start, end) {
   }
   let root;
   if (kind === 'wall') root = createWall(start, end, { height: settings.wallHeight, thickness: settings.wallDepth, color: settings.wallColor, world });
-  else if (kind === 'glassWall') root = createGlassWall(start, end, { height: settings.glassHeight, thickness: settings.glassDepth, color: settings.glassColor });
+  else if (kind === 'glassWall') root = createGlassWall(start, end, { height: settings.glassHeight, thickness: 0.035, color: settings.glassColor });
   else if (kind === 'road') root = createRoad(start, end, { width: settings.roadWidth });
   else root = createSidewalk(start, end, { width: 1.5 });
   world.add(root);
@@ -2150,15 +2191,32 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
         const previous = world.children.filter((item) => item.userData.kind === 'spawnPoint');
         if (previous.length) removeRoots(previous);
       }
-      const objectOptions = kind === 'floorSlab'
-        ? {
-            width: settings.floorWidth,
-            depth: settings.floorDepth,
-            height: settings.floorThickness,
-            color: settings.floorColor,
-          }
-        : {};
-      if (kind === 'floorSlab') point.y = settings.floorElevation;
+      let objectOptions = {};
+      if (kind === 'floorSlab') {
+        objectOptions = {
+          width: settings.floorWidth,
+          depth: settings.floorDepth,
+          height: settings.floorThickness,
+          color: settings.floorColor,
+        };
+        point.y = settings.floorElevation;
+      } else if (kind === 'roof') {
+        objectOptions = {
+          width: settings.roofWidth,
+          depth: settings.roofDepth,
+          height: settings.roofThickness,
+          color: settings.roofColor,
+        };
+        point.y = settings.roofElevation;
+      } else if (kind === 'carport') {
+        objectOptions = {
+          width: settings.carportWidth,
+          depth: settings.carportDepth,
+          height: settings.carportHeight,
+          color: settings.carportColor,
+        };
+        point.y = 0;
+      }
       const created = createObject(kind, point, objectOptions);
       if (created) addRoot(created, `${objectLabel(kind)} adicionado`);
     }
@@ -2711,7 +2769,10 @@ function exitVehicle() {
   interactionRoot = null;
 
   currentGroundHeight = safeExit.ground;
+  verticalVelocity = 0;
+  playerGrounded = true;
   gameCamera.position.copy(safeExit.position);
+  lastSafePlayerPosition.copy(gameCamera.position);
   gameCamera.rotation.set(0, vehicle.rotation.y, 0);
 
   if (localPlayer) {
@@ -3034,8 +3095,11 @@ function startGame() {
   transform.detach();
   rebuildGameCaches();
   currentGroundHeight = groundHeightAt(new THREE.Vector3(localPlayer?.x ?? 0, 0, localPlayer?.z ?? 12), localPlayer?.y || 0);
+  verticalVelocity = 0;
+  playerGrounded = true;
   if (localPlayer) localPlayer = { ...localPlayer, y: currentGroundHeight };
   gameCamera.position.set(localPlayer?.x ?? 0, currentGroundHeight + 1.7, localPlayer?.z ?? 12);
+  lastSafePlayerPosition.copy(gameCamera.position);
   gameCamera.rotation.set(0, localPlayer?.ry ?? 0, 0);
   if (realtimeChannel && localPlayer) broadcast('player_state', { ...localPlayer, vx: 0, vz: 0, sentAt: Date.now() }).catch(() => {});
   updatePlayersList();
@@ -3051,23 +3115,27 @@ function rebuildGameCaches() {
   walkableRoots = [];
   world.updateMatrixWorld(true);
 
-  const staticKinds = new Set(['table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer', 'documentationTerminal', 'television']);
+  const staticKinds = new Set(['glassPanel', 'roof', 'carport', 'table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer', 'documentationTerminal', 'television']);
+  const addCollisionPieces = (root) => {
+    for (const piece of root.userData.collisionPieces || []) {
+      const center = new THREE.Vector3().fromArray(piece.center);
+      const size = new THREE.Vector3().fromArray(piece.size);
+      const localBox = new THREE.Box3().setFromCenterAndSize(center, size);
+      staticCollisionBoxes.push(localBox.applyMatrix4(root.matrixWorld));
+    }
+  };
+
   for (const root of world.children) {
     const kind = root.userData.kind;
-    if (kind === 'wall' || kind === 'glassWall') {
-      for (const piece of root.userData.collisionPieces || []) {
-        const center = new THREE.Vector3().fromArray(piece.center);
-        const size = new THREE.Vector3().fromArray(piece.size);
-        const localBox = new THREE.Box3().setFromCenterAndSize(center, size);
-        staticCollisionBoxes.push(localBox.applyMatrix4(root.matrixWorld));
-      }
-    } else if (kind === 'door' || kind === 'slidingGate') {
+    if (kind === 'door' || kind === 'slidingGate') {
       dynamicCollisionRoots.push(root);
+    } else if (root.userData.collisionPieces?.length) {
+      addCollisionPieces(root);
     } else if (staticKinds.has(kind)) {
       staticCollisionBoxes.push(new THREE.Box3().setFromObject(root));
     }
 
-    if (kind === 'floorSlab' || kind === 'stairs') walkableRoots.push(root);
+    if (kind === 'floorSlab' || kind === 'roof' || kind === 'stairs') walkableRoots.push(root);
 
     if (['door', 'window', 'slidingGate', 'car', 'motorcycle'].includes(kind) || NETWORK_KINDS.has(kind)) {
       root.traverse((child) => { if (child.isMesh) interactionMeshes.push(child); });
@@ -3080,7 +3148,7 @@ function surfaceHeightForRoot(root, worldPosition) {
   const dimensions = root.userData.dimensions || {};
   const local = root.worldToLocal(worldPosition.clone());
 
-  if (kind === 'floorSlab') {
+  if (kind === 'floorSlab' || kind === 'roof') {
     const width = Number(dimensions.width) || 4;
     const depth = Number(dimensions.depth) || 4;
     const height = Number(dimensions.height) || 0.14;
@@ -3103,15 +3171,130 @@ function surfaceHeightForRoot(root, worldPosition) {
   return null;
 }
 
-function groundHeightAt(position, fromHeight = 0) {
+function footprintOverlapsBox(position, box, radius = 0.27) {
+  return position.x + radius > box.min.x
+    && position.x - radius < box.max.x
+    && position.z + radius > box.min.z
+    && position.z - radius < box.max.z;
+}
+
+function supportHeightAt(position, maxHeight = Infinity) {
   let best = 0;
-  const probe = new THREE.Vector3(position.x, fromHeight + 0.1, position.z);
+  const probe = new THREE.Vector3(position.x, Number.isFinite(maxHeight) ? maxHeight : 0, position.z);
+
   for (const root of walkableRoots) {
     const height = surfaceHeightForRoot(root, probe);
     if (height == null) continue;
-    if (height <= fromHeight + 0.46 && height > best) best = height;
+    if (height <= maxHeight + 0.035 && height > best) best = height;
+  }
+
+  // Topos sólidos também impedem que o personagem atravesse uma parede,
+  // móvel, teto ou cobertura ao cair de um pavimento superior.
+  for (const box of staticCollisionBoxes) {
+    if (!footprintOverlapsBox(position, box)) continue;
+    if (box.max.y <= maxHeight + 0.035 && box.max.y > best) best = box.max.y;
+  }
+  for (const root of dynamicCollisionRoots) {
+    const movingPart = root.userData.movingPart;
+    if (!movingPart) continue;
+    const box = new THREE.Box3().setFromObject(movingPart);
+    if (!footprintOverlapsBox(position, box)) continue;
+    if (box.max.y <= maxHeight + 0.035 && box.max.y > best) best = box.max.y;
   }
   return best;
+}
+
+function groundHeightAt(position, fromHeight = 0) {
+  return supportHeightAt(position, fromHeight + 0.46);
+}
+
+function recoverPlayerFromPenetration() {
+  if (!collides(gameCamera.position)) {
+    lastSafePlayerPosition.copy(gameCamera.position);
+    return false;
+  }
+
+  const candidates = [
+    lastSafePlayerPosition.clone(),
+    ...[0.32, 0.52, 0.78].flatMap((radius) => Array.from({ length: 12 }, (_, index) => {
+      const angle = index / 12 * Math.PI * 2;
+      return gameCamera.position.clone().add(new THREE.Vector3(Math.cos(angle) * radius, 0, Math.sin(angle) * radius));
+    })),
+  ];
+  for (const candidate of candidates) {
+    const feet = Math.max(0, candidate.y - 1.7);
+    const support = supportHeightAt(candidate, feet + 0.08);
+    candidate.y = Math.max(candidate.y, support + 1.7);
+    if (!collides(candidate)) {
+      gameCamera.position.copy(candidate);
+      currentGroundHeight = gameCamera.position.y - 1.7;
+      verticalVelocity = Math.min(0, verticalVelocity);
+      return true;
+    }
+  }
+
+  const spawn = getSpawnTransform();
+  gameCamera.position.set(spawn.x, (spawn.y || 0) + 1.7, spawn.z);
+  currentGroundHeight = spawn.y || 0;
+  verticalVelocity = 0;
+  playerGrounded = true;
+  lastSafePlayerPosition.copy(gameCamera.position);
+  return true;
+}
+
+function updatePlayerVertical(delta) {
+  const feet = gameCamera.position.y - 1.7;
+  const support = supportHeightAt(gameCamera.position, feet + 0.08);
+  const gap = feet - support;
+
+  if (gap <= 0.035 && verticalVelocity <= 0) {
+    gameCamera.position.y = support + 1.7;
+    verticalVelocity = 0;
+    playerGrounded = true;
+    currentGroundHeight = support;
+  } else {
+    playerGrounded = false;
+    verticalVelocity = Math.max(-28, verticalVelocity - 18.5 * delta);
+    const travel = verticalVelocity * delta;
+    const steps = Math.max(1, Math.ceil(Math.abs(travel) / 0.10));
+    const step = travel / steps;
+
+    for (let index = 0; index < steps; index += 1) {
+      const previousFeet = gameCamera.position.y - 1.7;
+      const next = gameCamera.position.clone();
+      next.y += step;
+      const nextFeet = next.y - 1.7;
+      const landing = supportHeightAt(next, previousFeet + 0.04);
+
+      if (verticalVelocity <= 0 && nextFeet <= landing + 0.005) {
+        next.y = landing + 1.7;
+        gameCamera.position.copy(next);
+        verticalVelocity = 0;
+        playerGrounded = true;
+        break;
+      }
+
+      // Se a caixa do personagem encontrar uma parede durante a queda,
+      // aterrissa no topo quando possível; nunca continua dentro do sólido.
+      if (collides(next)) {
+        const solidTop = supportHeightAt(next, previousFeet + 0.08);
+        if (verticalVelocity <= 0 && solidTop <= previousFeet + 0.08) {
+          next.y = solidTop + 1.7;
+          gameCamera.position.copy(next);
+          verticalVelocity = 0;
+          playerGrounded = true;
+        } else {
+          recoverPlayerFromPenetration();
+        }
+        break;
+      }
+      gameCamera.position.copy(next);
+    }
+    currentGroundHeight = gameCamera.position.y - 1.7;
+  }
+
+  if (gameCamera.position.y < -8 || !Number.isFinite(gameCamera.position.y)) recoverPlayerFromPenetration();
+  else if (!collides(gameCamera.position)) lastSafePlayerPosition.copy(gameCamera.position);
 }
 
 function collides(position, ignoredVehicle = activeVehicle) {
@@ -3446,14 +3629,23 @@ $('#showAlignmentGuides').addEventListener('change', (event) => {
 });
 $('#wallHeightDefault').addEventListener('change', (event) => { settings.wallHeight = Math.max(1.8, Number(event.target.value) || 3); });
 $('#wallDepthDefault').addEventListener('change', (event) => { settings.wallDepth = Math.max(0.08, Number(event.target.value) || 0.16); });
-$('#glassHeightDefault').addEventListener('change', (event) => { settings.glassHeight = Math.max(0.5, Number(event.target.value) || 3); });
-$('#glassDepthDefault').addEventListener('change', (event) => { settings.glassDepth = Math.max(0.018, Number(event.target.value) || 0.035); });
+$('#glassWidthDefault').addEventListener('change', (event) => { settings.glassWidth = Math.max(0.25, Number(event.target.value) || 2.4); });
+$('#glassHeightDefault').addEventListener('change', (event) => { settings.glassHeight = Math.max(0.25, Number(event.target.value) || 2.6); });
 $('#glassColorDefault').addEventListener('input', (event) => { settings.glassColor = event.target.value; });
 $('#floorWidthDefault').addEventListener('change', (event) => { settings.floorWidth = Math.max(0.2, Number(event.target.value) || 4); });
 $('#floorDepthDefault').addEventListener('change', (event) => { settings.floorDepth = Math.max(0.2, Number(event.target.value) || 4); });
 $('#floorThicknessDefault').addEventListener('change', (event) => { settings.floorThickness = Math.max(0.03, Number(event.target.value) || 0.14); });
 $('#floorElevationDefault').addEventListener('change', (event) => { settings.floorElevation = Number(event.target.value) || 0; });
 $('#floorColorDefault').addEventListener('input', (event) => { settings.floorColor = event.target.value; });
+$('#roofWidthDefault').addEventListener('change', (event) => { settings.roofWidth = Math.max(0.3, Number(event.target.value) || 4); });
+$('#roofDepthDefault').addEventListener('change', (event) => { settings.roofDepth = Math.max(0.3, Number(event.target.value) || 4); });
+$('#roofThicknessDefault').addEventListener('change', (event) => { settings.roofThickness = Math.max(0.04, Number(event.target.value) || 0.16); });
+$('#roofElevationDefault').addEventListener('change', (event) => { settings.roofElevation = Math.max(1.8, Number(event.target.value) || 3); });
+$('#roofColorDefault').addEventListener('input', (event) => { settings.roofColor = event.target.value; });
+$('#carportWidthDefault').addEventListener('change', (event) => { settings.carportWidth = Math.max(1.8, Number(event.target.value) || 5.5); });
+$('#carportDepthDefault').addEventListener('change', (event) => { settings.carportDepth = Math.max(2.2, Number(event.target.value) || 5.2); });
+$('#carportHeightDefault').addEventListener('change', (event) => { settings.carportHeight = Math.max(1.8, Number(event.target.value) || 2.7); });
+$('#carportColorDefault').addEventListener('input', (event) => { settings.carportColor = event.target.value; });
 $('#wallColorDefault').addEventListener('input', (event) => { settings.wallColor = event.target.value; });
 $('#roadWidthDefault').addEventListener('change', (event) => { settings.roadWidth = Math.max(2, Number(event.target.value) || 6); });
 $('#doorWidthDefault').addEventListener('change', (event) => { settings.doorWidth = Math.max(0.55, Number(event.target.value) || 0.9); });
@@ -3599,26 +3791,30 @@ function animate() {
         const right = new THREE.Vector3().crossVectors(direction, new THREE.Vector3(0, 1, 0)).normalize();
         const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6.4 : 4.2;
         const movement = direction.multiplyScalar(forward).add(right.multiplyScalar(side)).normalize().multiplyScalar(speed * delta);
-        const nextX = gameCamera.position.clone();
-        nextX.x += movement.x;
-        const nextXGround = groundHeightAt(nextX, currentGroundHeight);
-        nextX.y = nextXGround + 1.7;
-        if (nextXGround - currentGroundHeight <= 0.46 && !collides(nextX)) {
-          gameCamera.position.x = nextX.x;
-          currentGroundHeight = nextXGround;
-        }
+        const feet = gameCamera.position.y - 1.7;
 
-        const nextZ = gameCamera.position.clone();
-        nextZ.z += movement.z;
-        const nextZGround = groundHeightAt(nextZ, currentGroundHeight);
-        nextZ.y = nextZGround + 1.7;
-        if (nextZGround - currentGroundHeight <= 0.46 && !collides(nextZ)) {
-          gameCamera.position.z = nextZ.z;
-          currentGroundHeight = nextZGround;
-        }
-        currentGroundHeight = groundHeightAt(gameCamera.position, currentGroundHeight);
-        gameCamera.position.y = currentGroundHeight + 1.7;
+        const tryAxis = (axis, amount) => {
+          if (!amount) return;
+          const next = gameCamera.position.clone();
+          next[axis] += amount;
+          const nextSupport = supportHeightAt(next, feet + 0.46);
+          const stepUp = nextSupport - feet;
+          if (stepUp > 0.46) return;
+          if (stepUp > 0.015) next.y = nextSupport + 1.7;
+          if (collides(next)) return;
+          gameCamera.position[axis] = next[axis];
+          if (stepUp > 0.015) {
+            gameCamera.position.y = next.y;
+            verticalVelocity = 0;
+            playerGrounded = true;
+          }
+        };
+
+        tryAxis('x', movement.x);
+        tryAxis('z', movement.z);
       }
+      recoverPlayerFromPenetration();
+      updatePlayerVertical(delta);
     }
     updateFirstPersonBody(delta, moving);
 
