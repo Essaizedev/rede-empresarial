@@ -1,16 +1,68 @@
 import * as THREE from 'three';
+import { createClient } from '@supabase/supabase-js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import './style.css';
 
-const PARTY_HOST = String(import.meta.env.VITE_PARTYKIT_HOST || '')
-  .trim()
-  .replace(/^https?:\/\//, '')
-  .replace(/^wss?:\/\//, '')
-  .replace(/\/$/, '');
-
 const app = document.querySelector('#app');
+
+function showFatalError(message) {
+  let box = document.querySelector('#fatalError');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'fatalError';
+    box.style.cssText = [
+      'position:fixed',
+      'inset:20px',
+      'z-index:9999',
+      'overflow:auto',
+      'padding:18px',
+      'border-radius:14px',
+      'background:#4b1717',
+      'color:#fff',
+      'font:16px/1.45 system-ui,sans-serif',
+      'box-shadow:0 20px 70px #0008'
+    ].join(';');
+    document.body.appendChild(box);
+  }
+  box.textContent = `Erro ao abrir o site: ${message}`;
+}
+
+window.addEventListener('error', (event) => {
+  showFatalError(event.error?.message || event.message || 'erro desconhecido');
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  showFatalError(event.reason?.message || String(event.reason || 'erro desconhecido'));
+});
+
+const SUPABASE_URL = String(import.meta.env.VITE_SUPABASE_URL || '').trim();
+const SUPABASE_PUBLISHABLE_KEY = String(
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+).trim();
+
+let supabase = null;
+let supabaseInitError = '';
+
+if (SUPABASE_URL || SUPABASE_PUBLISHABLE_KEY) {
+  try {
+    if (!SUPABASE_URL.startsWith('https://') || !SUPABASE_URL.endsWith('.supabase.co')) {
+      throw new Error('VITE_SUPABASE_URL inválida. Use o endereço https://...supabase.co, sem aspas.');
+    }
+    if (!SUPABASE_PUBLISHABLE_KEY.startsWith('sb_publishable_')) {
+      throw new Error('VITE_SUPABASE_PUBLISHABLE_KEY inválida. Use a Publishable key que começa com sb_publishable_.');
+    }
+
+    supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      realtime: { params: { eventsPerSecond: 20 } },
+    });
+  } catch (error) {
+    supabaseInitError = error instanceof Error ? error.message : String(error);
+  }
+}
+
 app.innerHTML = `
   <section id="homeOverlay" class="overlay">
     <div class="home-card">
@@ -125,14 +177,18 @@ const joinRoom = $('#joinRoom');
 const publishRoom = $('#publishRoom');
 const playersList = $('#playersList');
 const toast = $('#toast');
+const joinButton = $('#joinRoomButton');
+const publishButton = $('#publishScene');
 
 joinName.value = localStorage.getItem('empresa3d-name') || '';
 joinRoom.value = localStorage.getItem('empresa3d-room') || 'turma-0123';
 publishRoom.value = localStorage.getItem('empresa3d-room') || 'turma-0123';
-if (!PARTY_HOST) {
-  $('#onlineWarning').textContent = 'O construtor funciona normalmente. Para entrar online, o responsável pelo projeto precisa configurar VITE_PARTYKIT_HOST na Vercel.';
-  $('#joinRoomButton').disabled = true;
-  $('#publishScene').disabled = true;
+if (!supabase) {
+  $('#onlineWarning').textContent = supabaseInitError
+    ? `Configuração do Supabase com erro: ${supabaseInitError}`
+    : 'O construtor funciona normalmente. Para usar salas online, configure VITE_SUPABASE_URL e VITE_SUPABASE_PUBLISHABLE_KEY na Vercel.';
+  joinButton.disabled = true;
+  publishButton.disabled = true;
 }
 
 const scene = new THREE.Scene();
@@ -200,7 +256,8 @@ let currentTool = 'select';
 let selected = null;
 let wallStart = null;
 let referencePlane = null;
-let socket = null;
+let realtimeChannel = null;
+let currentRoom = '';
 let localPlayer = null;
 let lastMoveSent = 0;
 let toastTimer = null;
@@ -550,7 +607,7 @@ function showHome() {
   gameUi.classList.add('hidden');
   grid.visible = true;
   referenceLayer.visible = true;
-  disconnectSocket();
+  disconnectRealtime();
 }
 
 function openBuilder() {
@@ -669,92 +726,155 @@ function clearAvatars() {
   updatePlayersList();
 }
 
-function send(message) {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+function flattenPresenceState(state) {
+  return Object.values(state || {}).flatMap((entries) => Array.isArray(entries) ? entries : []);
 }
 
-function disconnectSocket() {
-  if (socket) {
-    socket.onclose = null;
-    socket.close();
-    socket = null;
+function syncPresencePlayers() {
+  if (!realtimeChannel) return;
+  const seen = new Set();
+  for (const player of flattenPresenceState(realtimeChannel.presenceState())) {
+    if (!player?.id || player.id === localPlayer?.id) continue;
+    seen.add(player.id);
+    upsertRemote(player);
   }
+  for (const id of [...remotePlayers.keys()]) {
+    if (!seen.has(id)) removeRemote(id);
+  }
+  updatePlayersList();
+}
+
+async function broadcast(event, payload) {
+  if (!realtimeChannel) return;
+  await realtimeChannel.send({ type: 'broadcast', event, payload });
+}
+
+function disconnectRealtime() {
+  const oldChannel = realtimeChannel;
+  realtimeChannel = null;
+  currentRoom = '';
+  if (oldChannel && supabase) supabase.removeChannel(oldChannel).catch(() => {});
   clearAvatars();
   localPlayer = null;
 }
 
-function websocketUrl(room) {
-  return `wss://${PARTY_HOST}/parties/main/${encodeURIComponent(room)}`;
+async function loadPublishedScene(room) {
+  if (!supabase) return { ok: false, reason: 'not-configured' };
+  const { data, error } = await supabase
+    .from('scenes')
+    .select('scene')
+    .eq('room_code', room)
+    .maybeSingle();
+  if (error) return { ok: false, reason: error.message };
+  if (!data || !Array.isArray(data.scene)) return { ok: false, reason: 'not-found' };
+  loadWorld(data.scene);
+  return { ok: true };
 }
 
-function joinOnline(name, room) {
-  if (!PARTY_HOST) return;
-  disconnectSocket();
+async function joinOnline(name, room) {
+  if (!supabase) return;
+  joinButton.disabled = true;
+  $('#onlineWarning').textContent = 'Entrando na sala...';
+  disconnectRealtime();
+
+  const loaded = await loadPublishedScene(room);
+  if (!loaded.ok) {
+    joinButton.disabled = false;
+    $('#onlineWarning').textContent = loaded.reason === 'not-found'
+      ? 'Essa sala ainda não possui um cenário publicado.'
+      : `Não foi possível carregar a sala: ${loaded.reason}`;
+    return;
+  }
+
   localStorage.setItem('empresa3d-name', name);
   localStorage.setItem('empresa3d-room', room);
   localPlayer = {
     id: crypto.randomUUID(),
     name,
     color: Math.floor(Math.random() * 0xffffff),
+    x: 0,
+    z: 12,
+    ry: 0,
   };
-  socket = new WebSocket(websocketUrl(room));
-  socket.addEventListener('open', () => {
-    send({ type: 'join', player: localPlayer });
-    startGame();
-    showToast(`Sala: ${room}`);
+  currentRoom = room;
+  realtimeChannel = supabase.channel(`empresa3d:${room}`, {
+    config: {
+      private: false,
+      broadcast: { self: false },
+      presence: { key: localPlayer.id },
+    },
   });
-  socket.addEventListener('message', (event) => {
-    let message;
-    try { message = JSON.parse(event.data); } catch { return; }
-    if (message.type === 'snapshot') {
-      if (Array.isArray(message.scene)) loadWorld(message.scene);
-      for (const player of message.players || []) upsertRemote(player);
-    } else if (message.type === 'player_joined') {
-      upsertRemote(message.player);
-    } else if (message.type === 'player_moved') {
-      upsertRemote(message.player);
-    } else if (message.type === 'player_left') {
-      removeRemote(message.id);
-    } else if (message.type === 'door') {
-      const door = world.children.find((root) => root.userData.objectId === message.objectId && root.userData.kind === 'door');
-      if (door) setDoorOpen(door, message.open, false);
-    } else if (message.type === 'scene_published') {
-      if (Array.isArray(message.scene)) loadWorld(message.scene);
-      showToast('O cenário foi atualizado.');
-    }
-  });
-  socket.addEventListener('error', () => {
-    alert('Não foi possível entrar na sala. Confirme se o PartyKit está publicado e se VITE_PARTYKIT_HOST está correto.');
-    showHome();
-  });
+
+  realtimeChannel
+    .on('presence', { event: 'sync' }, syncPresencePlayers)
+    .on('presence', { event: 'join' }, syncPresencePlayers)
+    .on('presence', { event: 'leave' }, syncPresencePlayers)
+    .on('broadcast', { event: 'door' }, ({ payload }) => {
+      const door = world.children.find((root) => root.userData.objectId === payload?.objectId && root.userData.kind === 'door');
+      if (door) setDoorOpen(door, Boolean(payload.open), false);
+    })
+    .on('broadcast', { event: 'scene_published' }, ({ payload }) => {
+      if (Array.isArray(payload?.scene)) {
+        loadWorld(payload.scene);
+        showToast('O cenário foi atualizado.');
+      }
+    })
+    .subscribe(async (status, error) => {
+      if (status === 'SUBSCRIBED') {
+        await realtimeChannel.track(localPlayer);
+        startGame();
+        joinButton.disabled = false;
+        $('#onlineWarning').textContent = '';
+        showToast(`Sala: ${room}`);
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        joinButton.disabled = false;
+        $('#onlineWarning').textContent = `Não foi possível entrar na sala${error?.message ? `: ${error.message}` : '.'}`;
+        disconnectRealtime();
+      }
+    });
 }
 
-function publishCurrentScene(room) {
-  if (!PARTY_HOST) return;
-  const normalizedRoom = room.trim().replace(/[^a-zA-Z0-9_-]/g, '-');
+async function publishCurrentScene(room) {
+  if (!supabase) return;
+  const normalizedRoom = room.trim().replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 50);
   if (!normalizedRoom) {
     setBuilderStatus('Digite um código de sala.');
     return;
   }
+
+  publishButton.disabled = true;
+  setBuilderStatus('Publicando cenário...');
   localStorage.setItem('empresa3d-room', normalizedRoom);
-  const publishingSocket = new WebSocket(websocketUrl(normalizedRoom));
-  publishingSocket.addEventListener('open', () => {
-    publishingSocket.send(JSON.stringify({ type: 'publish_scene', scene: serializeWorld() }));
+  const sceneData = serializeWorld();
+  const { error } = await supabase
+    .from('scenes')
+    .upsert({
+      room_code: normalizedRoom,
+      scene: sceneData,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'room_code' });
+
+  if (error) {
+    publishButton.disabled = false;
+    setBuilderStatus(`Erro ao publicar: ${error.message}`);
+    return;
+  }
+
+  const publisher = supabase.channel(`empresa3d:${normalizedRoom}`, {
+    config: { private: false, broadcast: { self: false } },
   });
-  publishingSocket.addEventListener('message', (event) => {
-    let message;
-    try { message = JSON.parse(event.data); } catch { return; }
-    if (message.type === 'published') {
-      setBuilderStatus(`Cenário publicado na sala ${normalizedRoom}.`);
-      publishingSocket.close();
-    }
+  publisher.subscribe(async (status) => {
+    if (status !== 'SUBSCRIBED') return;
+    await publisher.send({ type: 'broadcast', event: 'scene_published', payload: { scene: sceneData } });
+    await supabase.removeChannel(publisher);
   });
-  publishingSocket.addEventListener('error', () => setBuilderStatus('Erro ao publicar. Verifique o PartyKit.'));
+  publishButton.disabled = false;
+  setBuilderStatus(`Cenário publicado na sala ${normalizedRoom}.`);
 }
 
 function startSoloGame() {
   localPlayer = { id: crypto.randomUUID(), name: 'Você' };
-  disconnectSocket();
+  disconnectRealtime();
   localPlayer = { id: crypto.randomUUID(), name: 'Você' };
   startGame();
 }
@@ -784,7 +904,7 @@ function setDoorOpen(door, open, broadcast = true) {
   door.userData.closedRotation ??= door.rotation.y;
   door.userData.open = open;
   door.rotation.y = door.userData.closedRotation + (open ? -Math.PI / 2 : 0);
-  if (broadcast) send({ type: 'door', objectId: door.userData.objectId, open });
+  if (broadcast) broadcast('door', { objectId: door.userData.objectId, open });
 }
 
 function collides(position) {
@@ -946,18 +1066,16 @@ function animate() {
       if (!collides(next)) camera.position.copy(next);
     }
     const now = performance.now();
-    if (socket?.readyState === WebSocket.OPEN && now - lastMoveSent > 100) {
+    if (realtimeChannel && localPlayer && now - lastMoveSent > 100) {
       const direction = new THREE.Vector3();
       camera.getWorldDirection(direction);
-      send({
-        type: 'move',
-        player: {
-          ...localPlayer,
-          x: camera.position.x,
-          z: camera.position.z,
-          ry: Math.atan2(direction.x, direction.z),
-        },
-      });
+      localPlayer = {
+        ...localPlayer,
+        x: camera.position.x,
+        z: camera.position.z,
+        ry: Math.atan2(direction.x, direction.z),
+      };
+      realtimeChannel.track(localPlayer).catch(() => {});
       lastMoveSent = now;
     }
   }

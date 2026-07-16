@@ -1,47 +1,56 @@
-# Empresa 3D — Construtor offline e sala online
+# Empresa 3D — Vite + Three.js + Supabase
 
-Não há cadastro ou login para os visitantes.
+Não há cadastro nem login para alunos ou visitantes.
 
 ## Fluxo
 
-1. **Construir sozinho:** abre o editor imediatamente e salva no navegador.
-2. **Publicar cenário:** envia o projeto para um código de sala.
-3. **Entrar em sala:** o visitante informa somente nome e código da sala.
+1. **Construir sozinho:** abre o editor e salva no navegador.
+2. **Publicar cenário:** grava o cenário no Supabase usando um código de sala.
+3. **Entrar na sala:** o visitante informa somente nome e código da sala.
+4. **Tempo real:** Supabase Presence sincroniza os jogadores; Broadcast sincroniza portas e atualizações do cenário.
 
-## Publicar o frontend na Vercel
+## 1. Criar o Supabase
 
-Na raiz do projeto:
+1. Crie um projeto no painel do Supabase.
+2. Abra **SQL Editor > New query**.
+3. Cole todo o conteúdo de `supabase-setup.sql` e clique em **Run**.
+4. Em **Project Settings > Realtime Settings**, mantenha o Realtime ativo e permita canais públicos.
+5. Abra o painel **Connect** ou **Settings > API Keys** e copie:
+   - Project URL
+   - Publishable key (`sb_publishable_...`)
 
-- Framework Preset: `Vite`
-- Install Command: padrão
-- Build Command: `npm run build`
-- Output Directory: `dist`
-- Node.js: `22.x`
+Nunca use a Secret key no navegador ou na Vercel deste projeto.
 
-O projeto deliberadamente não inclui `package-lock.json`. O arquivo `.npmrc` aponta para o registro público do npm.
+## 2. Variáveis na Vercel
 
-## Publicar o PartyKit
-
-No GitHub Codespaces:
-
-```bash
-cd party-server
-npm install --registry=https://registry.npmjs.org/
-npm run deploy
-```
-
-O PartyKit poderá solicitar autenticação do **responsável que publica o servidor uma única vez**. Os alunos e visitantes nunca fazem login.
-
-Depois, na Vercel, crie a variável:
+No projeto da Vercel, abra **Settings > Environment Variables** e crie:
 
 ```text
-VITE_PARTYKIT_HOST=rede-empresa-online.seuusuario.partykit.dev
+VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 ```
 
-Use apenas o domínio, sem `https://`.
+Marque Production e Preview. Depois faça um novo deploy.
 
-## Teste
+## 3. Configuração Vercel
 
-- Abra o construtor, crie uma parede e publique na sala `turma-0123`.
-- Abra o site em duas janelas anônimas.
-- Em cada uma, informe um nome diferente e a mesma sala.
+```text
+Framework Preset: Vite
+Root Directory: ./
+Install Command: padrão
+Build Command: npm run build
+Output Directory: dist
+Node.js Version: 22.x
+```
+
+## 4. Teste
+
+1. Abra **Construir sozinho**.
+2. Adicione uma parede ou equipamento.
+3. Digite `turma-0123` e clique em **Publicar cenário**.
+4. Abra duas janelas anônimas do site.
+5. Em cada janela, digite um nome diferente e a mesma sala `turma-0123`.
+
+## Observação de segurança
+
+Este protótipo usa salas públicas porque os participantes não fazem login. Quem souber o código da sala poderá entrar, e quem acessar o construtor poderá publicar naquele código. Use códigos pouco óbvios durante as aulas.
