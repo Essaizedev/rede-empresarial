@@ -1,0 +1,24 @@
+VERSÃO V5.5 — PISOS/LAJES E PROJETOS PESSOAIS
+
+Pisos e lajes:
+- Novo objeto Piso/Laje horizontal.
+- Largura, comprimento, espessura, elevação e cor configuráveis.
+- Pode ser redimensionado, movido, girado, duplicado e colocado em diferentes alturas.
+- A face superior é caminhável no teste.
+- Escadas passam a alterar gradualmente a altura do avatar.
+- A altura também é sincronizada no multiplayer.
+
+Projetos pessoais:
+- O construtor usa um rascunho privado salvo no localStorage do navegador.
+- Se não existir projeto, o construtor começa completamente vazio.
+- Se existir, abre automaticamente no ponto em que a pessoa parou.
+- Alterações são salvas automaticamente.
+- Entrar em uma sala online não substitui o projeto pessoal.
+- Sair da sala e abrir o construtor restaura o projeto privado.
+- Novo botão “Novo projeto”.
+- A publicação envia apenas uma cópia do cenário para a sala.
+
+Observação:
+Sem login, a privacidade é por navegador/perfil do navegador. Em computador compartilhado
+com o mesmo perfil, as pessoas compartilham o mesmo armazenamento local. Para trocar de
+computador, use Exportar/Importar.

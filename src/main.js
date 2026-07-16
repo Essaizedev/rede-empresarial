@@ -172,6 +172,8 @@ app.innerHTML = `
       <button id="undoAction" class="secondary" title="Desfazer (Ctrl+Z)">↶</button>
       <button id="redoAction" class="secondary" title="Refazer (Ctrl+Y)">↷</button>
       <button id="saveProject" class="secondary">Salvar versão</button>
+      <button id="newProject" class="secondary" title="Começar um projeto pessoal vazio">Novo projeto</button>
+      <span class="private-draft-badge" title="Este rascunho fica somente neste navegador">🔒 Rascunho privado</span>
       <button id="exportProject" class="secondary">Exportar</button>
       <button id="importProject" class="secondary">Importar</button>
       <input id="importFile" type="file" accept=".json" />
@@ -206,6 +208,7 @@ app.innerHTML = `
           <button data-add="door">Porta</button>
           <button data-add="window">Janela</button>
           <button data-add="slidingGate">Portão</button>
+          <button data-add="floorSlab">Piso/Laje</button>
           <button data-add="stairs">Escada</button>
         </div>
       </div>
@@ -259,6 +262,19 @@ app.innerHTML = `
           <label>Espessura do vidro<input id="glassDepthDefault" type="number" value="0.035" min="0.018" max="0.12" step="0.005" /></label>
         </div>
         <div class="field"><label>Cor do vidro<input id="glassColorDefault" type="color" value="#8fd7ef" /></label></div>
+        <div class="floor-defaults">
+          <strong>Piso/Laje horizontal</strong>
+          <div class="field-row">
+            <label>Largura<input id="floorWidthDefault" type="number" value="4" min="0.2" max="80" step="0.1" /></label>
+            <label>Comprimento<input id="floorDepthDefault" type="number" value="4" min="0.2" max="80" step="0.1" /></label>
+          </div>
+          <div class="field-row">
+            <label>Espessura<input id="floorThicknessDefault" type="number" value="0.14" min="0.03" max="1" step="0.01" /></label>
+            <label>Elevação<input id="floorElevationDefault" type="number" value="0" min="-2" max="30" step="0.05" /></label>
+          </div>
+          <div class="field"><label>Cor do piso<input id="floorColorDefault" type="color" value="#c9c6bb" /></label></div>
+          <p class="help-text">Para criar patamares e pavimentos, altere a elevação. A face superior será caminhável no teste.</p>
+        </div>
         <div class="field"><label>Cor das novas paredes<input id="wallColorDefault" type="color" value="#cfc6a2" /></label></div>
         <div class="color-swatches" aria-label="Cores rápidas para paredes">
           <button type="button" data-wall-color="#f2efe2" style="--swatch:#f2efe2" title="Branco quente"></button>
@@ -393,7 +409,7 @@ app.innerHTML = `
   </section>
 
   <section id="gameUi" class="hidden">
-    <div id="gameControls" class="game-panel"><strong>Controles</strong><br>W, A, S, D: andar ou dirigir<br>Shift: correr · Espaço: frear veículo<br>E ou clique: interagir/entrar/sair<br>1: acenar · 2: apontar<br><small>O teclado fica dedicado ao jogo enquanto esta tela estiver ativa.</small></div>
+    <div id="gameControls" class="game-panel"><strong>Controles</strong><br>W, A, S, D: andar ou dirigir<br>Shift: correr · Espaço: frear veículo<br>E: interagir/entrar/sair<br>1: acenar · 2: apontar<br><small>O teclado fica dedicado ao jogo enquanto esta tela estiver ativa.</small></div>
     <div id="playersPanel" class="game-panel"><strong>Participantes</strong><ol id="playersList"></ol></div>
     <div id="gameSettings" class="game-panel">
       <strong>Gráficos</strong>
@@ -851,6 +867,7 @@ const keys = new Set();
 let staticCollisionBoxes = [];
 let dynamicCollisionRoots = [];
 let interactionMeshes = [];
+let currentGroundHeight = 0;
 let lastInteractionCheck = 0;
 const playerCollisionBox = new THREE.Box3();
 const raycaster = new THREE.Raycaster();
@@ -862,6 +879,12 @@ let lastRenderedAt = 0;
 let activeVehicle = null;
 let firstPersonGesture = '';
 let firstPersonGestureUntil = 0;
+let worldSource = 'personal';
+let personalProjectInitialized = false;
+let personalAutosaveTimer = null;
+let walkableRoots = [];
+const PERSONAL_PROJECT_KEY = 'empresa3d-personal-project-v3';
+const PERSONAL_VERSIONS_KEY = 'empresa3d-personal-versions-v3';
 
 const settings = {
   grid: Number($('#gridSize').value),
@@ -875,6 +898,11 @@ const settings = {
   glassHeight: Number($('#glassHeightDefault').value),
   glassDepth: Number($('#glassDepthDefault').value),
   glassColor: $('#glassColorDefault').value,
+  floorWidth: Number($('#floorWidthDefault').value),
+  floorDepth: Number($('#floorDepthDefault').value),
+  floorThickness: Number($('#floorThicknessDefault').value),
+  floorElevation: Number($('#floorElevationDefault').value),
+  floorColor: $('#floorColorDefault').value,
   roadWidth: Number($('#roadWidthDefault').value),
   doorWidth: Number($('#doorWidthDefault').value),
   doorHeight: Number($('#doorHeightDefault').value),
@@ -1010,6 +1038,27 @@ function sceneString() {
   return JSON.stringify(serializeWorld());
 }
 
+function persistPersonalDraft({ immediate = false } = {}) {
+  if (worldSource !== 'personal') return;
+  const persist = () => {
+    personalAutosaveTimer = null;
+    localStorage.setItem(PERSONAL_PROJECT_KEY, JSON.stringify(serializeWorld()));
+  };
+  if (immediate) {
+    if (personalAutosaveTimer) clearTimeout(personalAutosaveTimer);
+    persist();
+  } else {
+    if (personalAutosaveTimer) clearTimeout(personalAutosaveTimer);
+    personalAutosaveTimer = setTimeout(persist, 180);
+  }
+}
+
+function resetHistory(label = 'Estado inicial') {
+  history.length = 0;
+  historyIndex = -1;
+  commitHistory(label);
+}
+
 function commitHistory(label = 'Alteração') {
   if (restoringHistory) return;
   const state = sceneString();
@@ -1019,6 +1068,7 @@ function commitHistory(label = 'Alteração') {
   if (history.length > 70) history.shift();
   historyIndex = history.length - 1;
   updateHistoryButtons();
+  persistPersonalDraft();
 }
 
 function updateHistoryButtons() {
@@ -1033,6 +1083,7 @@ function restoreHistory(index) {
   restoringHistory = false;
   historyIndex = index;
   updateHistoryButtons();
+  persistPersonalDraft();
   setBuilderStatus(`${history[index].label} restaurada.`);
 }
 
@@ -1040,28 +1091,41 @@ function undo() { restoreHistory(historyIndex - 1); }
 function redo() { restoreHistory(historyIndex + 1); }
 
 function saveLocalVersion() {
+  if (worldSource !== 'personal') return setBuilderStatus('Abra seu projeto pessoal antes de salvar uma versão.');
   const objects = serializeWorld();
-  localStorage.setItem('empresa3d-project-v2', JSON.stringify(objects));
-  const versions = JSON.parse(localStorage.getItem('empresa3d-versions-v2') || '[]');
+  localStorage.setItem(PERSONAL_PROJECT_KEY, JSON.stringify(objects));
+  const versions = JSON.parse(localStorage.getItem(PERSONAL_VERSIONS_KEY) || '[]');
   versions.unshift({ id: crypto.randomUUID(), at: Date.now(), objects });
-  localStorage.setItem('empresa3d-versions-v2', JSON.stringify(versions.slice(0, 12)));
+  localStorage.setItem(PERSONAL_VERSIONS_KEY, JSON.stringify(versions.slice(0, 12)));
   updateVersionList();
-  setBuilderStatus('Versão salva neste navegador.');
+  setBuilderStatus('Versão privada salva neste navegador.');
 }
 
-function restoreLocal() {
-  const saved = localStorage.getItem('empresa3d-project-v2') || localStorage.getItem('empresa3d-project');
-  if (!saved) return false;
+function loadPersonalProject() {
+  const saved = localStorage.getItem(PERSONAL_PROJECT_KEY)
+    || localStorage.getItem('empresa3d-project-v2')
+    || localStorage.getItem('empresa3d-project');
+  worldSource = 'personal';
+  if (!saved) {
+    loadWorld([]);
+    personalProjectInitialized = true;
+    return false;
+  }
   try {
     loadWorld(JSON.parse(saved));
+    // Migra silenciosamente versões antigas para o novo espaço privado.
+    localStorage.setItem(PERSONAL_PROJECT_KEY, JSON.stringify(serializeWorld()));
+    personalProjectInitialized = true;
     return true;
   } catch {
+    loadWorld([]);
+    personalProjectInitialized = true;
     return false;
   }
 }
 
 function updateVersionList() {
-  const versions = JSON.parse(localStorage.getItem('empresa3d-versions-v2') || '[]');
+  const versions = JSON.parse(localStorage.getItem(PERSONAL_VERSIONS_KEY) || localStorage.getItem('empresa3d-versions-v2') || '[]');
   $('#versionSelect').innerHTML = versions.length
     ? versions.map((version) => `<option value="${version.id}">${new Date(version.at).toLocaleString('pt-BR')}</option>`).join('')
     : '<option value="">Nenhuma versão salva</option>';
@@ -1853,7 +1917,16 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
         const previous = world.children.filter((item) => item.userData.kind === 'spawnPoint');
         if (previous.length) removeRoots(previous);
       }
-      const created = createObject(kind, point, {});
+      const objectOptions = kind === 'floorSlab'
+        ? {
+            width: settings.floorWidth,
+            depth: settings.floorDepth,
+            height: settings.floorThickness,
+            color: settings.floorColor,
+          }
+        : {};
+      if (kind === 'floorSlab') point.y = settings.floorElevation;
+      const created = createObject(kind, point, objectOptions);
       if (created) addRoot(created, `${objectLabel(kind)} adicionado`);
     }
     setTool('select');
@@ -2086,6 +2159,11 @@ function showHome() {
 }
 
 function openBuilder() {
+  const returningFromSoloTest = appMode === 'game' && gameReturnMode === 'builder' && worldSource === 'personal';
+  if (!returningFromSoloTest && (worldSource !== 'personal' || !personalProjectInitialized)) {
+    loadPersonalProject();
+    resetHistory(world.children.length ? 'Projeto pessoal carregado' : 'Projeto pessoal vazio');
+  }
   appMode = 'builder';
   gameReturnMode = 'home';
   keys.clear();
@@ -2250,11 +2328,12 @@ async function broadcast(event, payload) {
 
 function getSpawnTransform({ randomize = false } = {}) {
   const marker = world.children.find((root) => root.userData.kind === 'spawnPoint');
-  if (!marker) return { x: 0, z: 12, ry: 0 };
+  if (!marker) return { x: 0, y: 0, z: 12, ry: 0 };
   const spread = randomize ? 0.75 : 0;
   const angle = Math.random() * Math.PI * 2;
   return {
     x: marker.position.x + Math.cos(angle) * spread,
+    y: marker.position.y,
     z: marker.position.z + Math.sin(angle) * spread,
     ry: marker.rotation.y,
   };
@@ -2390,6 +2469,7 @@ function disconnectRealtime({ announce = true } = {}) {
 }
 
 function announcePageExit(event) {
+  if (worldSource === 'personal') persistPersonalDraft({ immediate: true });
   if (event?.type === 'pagehide' && event.persisted) return;
   const channel = realtimeChannel;
   const player = localPlayer;
@@ -2408,6 +2488,7 @@ async function loadPublishedScene(room) {
   const objects = Array.isArray(data.scene) ? data.scene : data.scene.objects;
   if (!Array.isArray(objects)) return { ok: false, reason: 'Cenário incompatível.' };
   loadWorld(objects);
+  worldSource = 'room';
   return { ok: true };
 }
 
@@ -2417,6 +2498,7 @@ async function joinOnline(name, room) {
   joinButton.disabled = true;
   $('#onlineWarning').textContent = 'Entrando na sala...';
   disconnectRealtime();
+  if (worldSource === 'personal') persistPersonalDraft({ immediate: true });
   const loaded = await loadPublishedScene(room);
   if (!loaded.ok) {
     joinButton.disabled = false;
@@ -2432,6 +2514,7 @@ async function joinOnline(name, room) {
     name,
     avatar: avatarConfig,
     x: spawn.x,
+    y: spawn.y || 0,
     z: spawn.z,
     ry: spawn.ry,
     moving: false,
@@ -2483,6 +2566,7 @@ async function joinOnline(name, room) {
           name: localPlayer.name,
           avatar: localPlayer.avatar,
           x: localPlayer.x,
+          y: localPlayer.y || 0,
           z: localPlayer.z,
           ry: localPlayer.ry,
           moving: false,
@@ -2578,9 +2662,11 @@ async function deletePublishedRoom(room, pin) {
 
 function startSoloGame() {
   disconnectRealtime();
+  worldSource = 'personal';
+  persistPersonalDraft({ immediate: true });
   gameReturnMode = 'builder';
   const spawn = getSpawnTransform();
-  localPlayer = { id: crypto.randomUUID(), name: 'Você', avatar: avatarConfig, x: spawn.x, z: spawn.z, ry: spawn.ry, moving: false, gesture: '', inVehicle: '' };
+  localPlayer = { id: crypto.randomUUID(), name: 'Você', avatar: avatarConfig, x: spawn.x, y: spawn.y || 0, z: spawn.z, ry: spawn.ry, moving: false, gesture: '', inVehicle: '' };
   startGame();
 }
 
@@ -2605,9 +2691,12 @@ function startGame() {
   mapControls.enabled = false;
   perspectiveControls.enabled = false;
   transform.detach();
-  gameCamera.position.set(localPlayer?.x ?? 0, 1.7, localPlayer?.z ?? 12);
-  gameCamera.rotation.set(0, localPlayer?.ry ?? 0, 0);
   rebuildGameCaches();
+  currentGroundHeight = groundHeightAt(new THREE.Vector3(localPlayer?.x ?? 0, 0, localPlayer?.z ?? 12), localPlayer?.y || 0);
+  if (localPlayer) localPlayer = { ...localPlayer, y: currentGroundHeight };
+  gameCamera.position.set(localPlayer?.x ?? 0, currentGroundHeight + 1.7, localPlayer?.z ?? 12);
+  gameCamera.rotation.set(0, localPlayer?.ry ?? 0, 0);
+  if (realtimeChannel && localPlayer) broadcast('player_state', { ...localPlayer, vx: 0, vz: 0, sentAt: Date.now() }).catch(() => {});
   updatePlayersList();
   exitGameButton.textContent = gameReturnMode === 'builder' ? 'Voltar ao editor' : 'Sair da sala';
   renderer.domElement.focus({ preventScroll: true });
@@ -2618,6 +2707,7 @@ function rebuildGameCaches() {
   staticCollisionBoxes = [];
   dynamicCollisionRoots = [];
   interactionMeshes = [];
+  walkableRoots = [];
   world.updateMatrixWorld(true);
 
   const staticKinds = new Set(['table', 'chair', 'cabinet', 'shelf', 'computer', 'switch', 'rack', 'server', 'printer']);
@@ -2636,15 +2726,57 @@ function rebuildGameCaches() {
       staticCollisionBoxes.push(new THREE.Box3().setFromObject(root));
     }
 
+    if (kind === 'floorSlab' || kind === 'stairs') walkableRoots.push(root);
+
     if (['door', 'window', 'slidingGate', 'car', 'motorcycle'].includes(kind) || NETWORK_KINDS.has(kind)) {
       root.traverse((child) => { if (child.isMesh) interactionMeshes.push(child); });
     }
   }
 }
 
+function surfaceHeightForRoot(root, worldPosition) {
+  const kind = root.userData.kind;
+  const dimensions = root.userData.dimensions || {};
+  const local = root.worldToLocal(worldPosition.clone());
+
+  if (kind === 'floorSlab') {
+    const width = Number(dimensions.width) || 4;
+    const depth = Number(dimensions.depth) || 4;
+    const height = Number(dimensions.height) || 0.14;
+    if (Math.abs(local.x) <= width / 2 + 0.02 && Math.abs(local.z) <= depth / 2 + 0.02) {
+      return root.position.y + height;
+    }
+  }
+
+  if (kind === 'stairs') {
+    const width = Number(dimensions.width) || 1.6;
+    const height = Number(dimensions.height) || 1.62;
+    const depth = Number(dimensions.depth) || 3.42;
+    const steps = Math.max(1, root.children.filter((child) => child.isMesh).length || 9);
+    const stepDepth = depth / steps;
+    if (Math.abs(local.x) <= width / 2 + 0.03 && local.z <= stepDepth / 2 + 0.03 && local.z >= -depth + stepDepth / 2 - 0.03) {
+      const index = THREE.MathUtils.clamp(Math.floor((-local.z + stepDepth / 2) / stepDepth), 0, steps - 1);
+      return root.position.y + ((index + 1) * height / steps);
+    }
+  }
+  return null;
+}
+
+function groundHeightAt(position, fromHeight = 0) {
+  let best = 0;
+  const probe = new THREE.Vector3(position.x, fromHeight + 0.1, position.z);
+  for (const root of walkableRoots) {
+    const height = surfaceHeightForRoot(root, probe);
+    if (height == null) continue;
+    if (height <= fromHeight + 0.46 && height > best) best = height;
+  }
+  return best;
+}
+
 function collides(position) {
-  playerCollisionBox.min.set(position.x - 0.29, 0.08, position.z - 0.29);
-  playerCollisionBox.max.set(position.x + 0.29, 1.82, position.z + 0.29);
+  const feetY = position.y - 1.7;
+  playerCollisionBox.min.set(position.x - 0.29, feetY + 0.08, position.z - 0.29);
+  playerCollisionBox.max.set(position.x + 0.29, feetY + 1.82, position.z + 0.29);
   for (const box of staticCollisionBoxes) if (box.intersectsBox(playerCollisionBox)) return true;
   for (const root of dynamicCollisionRoots) {
     if (root.userData.openProgress > 0.72 || !root.userData.movingPart) continue;
@@ -2748,6 +2880,17 @@ $('#soloTest').addEventListener('click', startSoloGame);
 $('#undoAction').addEventListener('click', undo);
 $('#redoAction').addEventListener('click', redo);
 $('#saveProject').addEventListener('click', saveLocalVersion);
+$('#newProject').addEventListener('click', () => {
+  if (!confirm('Começar um projeto pessoal vazio? O projeto atual continuará disponível somente nas versões salvas ou no arquivo exportado.')) return;
+  worldSource = 'personal';
+  loadWorld([]);
+  localStorage.setItem(PERSONAL_PROJECT_KEY, '[]');
+  history.length = 0;
+  historyIndex = -1;
+  commitHistory('Novo projeto vazio');
+  clearSelection();
+  setBuilderStatus('Novo projeto pessoal iniciado do zero.');
+});
 $('#publishScene').addEventListener('click', () => publishCurrentScene($('#publishRoom').value, $('#publishPin').value));
 $('#deleteRoom').addEventListener('click', () => deletePublishedRoom($('#publishRoom').value, $('#publishPin').value));
 $('#joinRoomButton').addEventListener('click', () => {
@@ -2799,7 +2942,7 @@ $('#importFile').addEventListener('change', (event) => {
 
 $('#restoreVersion').addEventListener('click', () => {
   const id = $('#versionSelect').value;
-  const versions = JSON.parse(localStorage.getItem('empresa3d-versions-v2') || '[]');
+  const versions = JSON.parse(localStorage.getItem(PERSONAL_VERSIONS_KEY) || localStorage.getItem('empresa3d-versions-v2') || '[]');
   const version = versions.find((item) => item.id === id);
   if (!version) return;
   loadWorld(version.objects);
@@ -2892,6 +3035,11 @@ $('#wallDepthDefault').addEventListener('change', (event) => { settings.wallDept
 $('#glassHeightDefault').addEventListener('change', (event) => { settings.glassHeight = Math.max(0.5, Number(event.target.value) || 3); });
 $('#glassDepthDefault').addEventListener('change', (event) => { settings.glassDepth = Math.max(0.018, Number(event.target.value) || 0.035); });
 $('#glassColorDefault').addEventListener('input', (event) => { settings.glassColor = event.target.value; });
+$('#floorWidthDefault').addEventListener('change', (event) => { settings.floorWidth = Math.max(0.2, Number(event.target.value) || 4); });
+$('#floorDepthDefault').addEventListener('change', (event) => { settings.floorDepth = Math.max(0.2, Number(event.target.value) || 4); });
+$('#floorThicknessDefault').addEventListener('change', (event) => { settings.floorThickness = Math.max(0.03, Number(event.target.value) || 0.14); });
+$('#floorElevationDefault').addEventListener('change', (event) => { settings.floorElevation = Number(event.target.value) || 0; });
+$('#floorColorDefault').addEventListener('input', (event) => { settings.floorColor = event.target.value; });
 $('#wallColorDefault').addEventListener('input', (event) => { settings.wallColor = event.target.value; });
 $('#roadWidthDefault').addEventListener('change', (event) => { settings.roadWidth = Math.max(2, Number(event.target.value) || 6); });
 $('#doorWidthDefault').addEventListener('change', (event) => { settings.doorWidth = Math.max(0.55, Number(event.target.value) || 0.9); });
@@ -3034,11 +3182,23 @@ function animate() {
         const movement = direction.multiplyScalar(forward).add(right.multiplyScalar(side)).normalize().multiplyScalar(speed * delta);
         const nextX = gameCamera.position.clone();
         nextX.x += movement.x;
-        if (!collides(nextX)) gameCamera.position.x = nextX.x;
+        const nextXGround = groundHeightAt(nextX, currentGroundHeight);
+        nextX.y = nextXGround + 1.7;
+        if (nextXGround - currentGroundHeight <= 0.46 && !collides(nextX)) {
+          gameCamera.position.x = nextX.x;
+          currentGroundHeight = nextXGround;
+        }
+
         const nextZ = gameCamera.position.clone();
         nextZ.z += movement.z;
-        if (!collides(nextZ)) gameCamera.position.z = nextZ.z;
-        gameCamera.position.y = 1.7;
+        const nextZGround = groundHeightAt(nextZ, currentGroundHeight);
+        nextZ.y = nextZGround + 1.7;
+        if (nextZGround - currentGroundHeight <= 0.46 && !collides(nextZ)) {
+          gameCamera.position.z = nextZ.z;
+          currentGroundHeight = nextZGround;
+        }
+        currentGroundHeight = groundHeightAt(gameCamera.position, currentGroundHeight);
+        gameCamera.position.y = currentGroundHeight + 1.7;
       }
     }
     updateFirstPersonBody(delta, moving);
@@ -3083,6 +3243,7 @@ function animate() {
         localPlayer = {
           ...localPlayer,
           x: activeVehicle ? activeVehicle.position.x : gameCamera.position.x,
+          y: activeVehicle ? 0 : currentGroundHeight,
           z: activeVehicle ? activeVehicle.position.z : gameCamera.position.z,
           ry: activeVehicle ? activeVehicle.rotation.y : Math.atan2(-look.x, -look.z),
           moving,
@@ -3146,12 +3307,10 @@ addEventListener('resize', updateCameraAspect);
 
 initAvatarPreview();
 updateVersionList();
-const restored = restoreLocal();
-if (!restored) {
-  addRoot(createRoad(new THREE.Vector3(-18, 0, 18), new THREE.Vector3(18, 0, 18), { width: 6 }), 'Cenário inicial');
-  clearSelection();
-}
-commitHistory('Estado inicial');
+const restored = loadPersonalProject();
+history.length = 0;
+historyIndex = -1;
+commitHistory(restored ? 'Projeto pessoal carregado' : 'Projeto pessoal vazio');
 applyPerformanceSettings({ persist: false });
 showHome();
 animate();

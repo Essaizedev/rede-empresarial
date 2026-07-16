@@ -16,6 +16,7 @@ export const OBJECT_LABELS = {
   sidewalk: 'Calçada',
   parking: 'Vaga de estacionamento',
   grass: 'Área verde',
+  floorSlab: 'Piso/Laje',
   table: 'Mesa',
   chair: 'Cadeira',
   cabinet: 'Armário',
@@ -792,6 +793,37 @@ function createRouter(position, options = {}) {
   return root;
 }
 
+function rebuildFloorSlab(root) {
+  clearChildren(root);
+  const dimensions = root.userData.dimensions || { width: 4, height: 0.14, depth: 4 };
+  const width = Math.max(0.2, Number(dimensions.width) || 4);
+  const height = Math.max(0.03, Number(dimensions.height) || 0.14);
+  const depth = Math.max(0.2, Number(dimensions.depth) || 4);
+  root.userData.dimensions = { width, height, depth };
+
+  const slab = makeMesh(
+    new THREE.BoxGeometry(width, height, depth),
+    root.userData.color || '#c9c6bb',
+    { roughness: 0.92, metalness: 0, castShadow: false, receiveShadow: true },
+  );
+  slab.position.y = height / 2;
+  slab.name = 'floor-slab';
+  root.add(slab);
+  markRoot(root);
+}
+
+function createFloorSlab(position, options = {}) {
+  const root = setupRoot(new THREE.Group(), 'floorSlab', { ...options, color: options.color || '#c9c6bb' });
+  root.userData.dimensions = {
+    width: Number(options.width) || 4,
+    height: Number(options.height) || 0.14,
+    depth: Number(options.depth) || 4,
+  };
+  root.position.copy(position);
+  rebuildFloorSlab(root);
+  return root;
+}
+
 function createStairs(position, options = {}) {
   const root = setupRoot(new THREE.Group(), 'stairs', { ...options, color: options.color || '#989891' });
   const steps = Number(options.steps) || 9;
@@ -974,6 +1006,7 @@ export function createObject(kind, position = new THREE.Vector3(), options = {})
   if (kind === 'slidingGate') return createSlidingGate(position, options);
   if (kind === 'parking') return createParking(position, options);
   if (kind === 'grass') return createGrass(position, options);
+  if (kind === 'floorSlab') return createFloorSlab(position, options);
   if (kind === 'table') return createTable(position, options);
   if (kind === 'chair') return createChair(position, options);
   if (kind === 'cabinet') return createCabinet(position, options);
@@ -1167,6 +1200,12 @@ export function resizeObject(root, dimensions, world = null) {
     return { width, height, depth: root.userData.segment.thickness };
   }
 
+  if (kind === 'floorSlab') {
+    root.userData.dimensions = { width, height, depth };
+    rebuildFloorSlab(root);
+    return { width, height, depth };
+  }
+
   if (kind === 'road' || kind === 'sidewalk') {
     const info = getSegmentInfo(root);
     const center = info.center;
@@ -1344,15 +1383,19 @@ export function createObjectFromData(data, world = null) {
   } else if (data.kind === 'cable') {
     root = createCable(null, null, { ...common, fromId: data.fromId, toId: data.toId });
   } else {
-    root = createObject(data.kind, position, OPENING_KINDS.has(data.kind) ? { ...common, ...dimensions } : common);
+    const creationOptions = OPENING_KINDS.has(data.kind) || data.kind === 'floorSlab'
+      ? { ...common, ...dimensions }
+      : common;
+    root = createObject(data.kind, position, creationOptions);
   }
   if (!root) return null;
   if (!SEGMENT_KINDS.has(data.kind) && data.kind !== 'cable') {
     root.position.fromArray(data.position || [0, 0, 0]);
     root.rotation.set(...(data.rotation || [0, 0, 0]));
-    if (OPENING_KINDS.has(data.kind)) root.scale.set(1, 1, 1);
+    if (OPENING_KINDS.has(data.kind) || data.kind === 'floorSlab') root.scale.set(1, 1, 1);
     else root.scale.fromArray(data.scale || [1, 1, 1]);
     if (data.dimensions) root.userData.dimensions = { ...data.dimensions };
+    if (data.kind === 'floorSlab') rebuildFloorSlab(root);
   }
   root.userData.meta = copyMeta(data.kind, data.meta);
   root.userData.locked = Boolean(data.locked);

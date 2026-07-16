@@ -469,7 +469,7 @@ export function createAvatar(player = {}, options = {}) {
 
 export function applyAvatarState(root, player = {}) {
   if (!root) return;
-  root.userData.targetPosition.set(Number(player.x) || 0, 0, Number(player.z) || 0);
+  root.userData.targetPosition.set(Number(player.x) || 0, Number(player.y) || 0, Number(player.z) || 0);
   root.userData.targetRotation = Number(player.ry) || 0;
   root.userData.moving = Boolean(player.moving);
   if (player.gesture) {

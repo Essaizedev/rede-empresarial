@@ -225,3 +225,27 @@ body.game-keyboard-captured canvas.webgl { outline: none; }
 #vehicleHud small { flex-basis: 100%; color: #cbd5cd; }
 
 .room-mini .delete { white-space: nowrap; }
+
+.private-draft-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .45rem .65rem;
+  border-radius: 999px;
+  background: rgba(29, 120, 76, .14);
+  border: 1px solid rgba(78, 190, 124, .28);
+  color: #bff2cf;
+  font-size: .78rem;
+  white-space: nowrap;
+}
+.floor-defaults {
+  margin: .65rem 0;
+  padding: .7rem;
+  border-radius: 10px;
+  background: rgba(130, 149, 155, .1);
+  border: 1px solid rgba(255,255,255,.08);
+}
+.floor-defaults > strong {
+  display: block;
+  margin-bottom: .45rem;
+}
