@@ -1,0 +1,11 @@
+CORREÇÕES E MELHORIAS V2
+
+- Teclado dedicado ao jogo: evita rolagem, foco em campos e vários atalhos do navegador enquanto o jogo está ativo.
+- Limpeza automática das teclas ao perder foco ou sair do Pointer Lock.
+- Cabelos e bonés reposicionados corretamente sobre a cabeça.
+- Camisas inspiradas nas seleções: Brasil, Argentina, Portugal, França, Alemanha, Espanha, Itália e Japão.
+- Cor de camisa personalizada mantida.
+- No construtor, botão esquerdo arrasta a câmera no modo Selecionar.
+- Vista superior: botão esquerdo move a planta.
+- Vista 3D: botão esquerdo gira a câmera; botão direito move lateralmente.
+- Clique curto continua selecionando objetos; arrastar não altera a seleção.

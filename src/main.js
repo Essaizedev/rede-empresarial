@@ -82,6 +82,7 @@ if (SUPABASE_URL || SUPABASE_KEY) {
 }
 
 const hairOptions = AVATAR_OPTIONS.hairStyles.map((item) => `<option value="${item.value}">${item.label}</option>`).join('');
+const shirtStyleOptions = AVATAR_OPTIONS.shirtStyles.map((item) => `<option value="${item.value}">${item.label}</option>`).join('');
 
 app.innerHTML = `
   <section id="homeOverlay" class="overlay">
@@ -102,8 +103,9 @@ app.innerHTML = `
         </div>
         <label>Tom de pele<input id="avatarSkin" type="color" /></label>
         <label>Cabelo<select id="avatarHairStyle">${hairOptions}</select></label>
-        <label>Cor do cabelo<input id="avatarHair" type="color" /></label>
-        <label>Camisa<input id="avatarShirt" type="color" /></label>
+        <label>Cor cabelo/boné<input id="avatarHair" type="color" /></label>
+        <label>Camisa de seleção<select id="avatarShirtStyle">${shirtStyleOptions}</select></label>
+        <label>Cor personalizada<input id="avatarShirt" type="color" /></label>
         <label>Calça<input id="avatarPants" type="color" /></label>
         <label>Calçado<input id="avatarShoes" type="color" /></label>
       </div>
@@ -308,7 +310,7 @@ app.innerHTML = `
   </section>
 
   <section id="gameUi" class="hidden">
-    <div id="gameControls" class="game-panel"><strong>Controles</strong><br>W, A, S, D: andar<br>Shift: correr<br>E ou clique: interagir<br>1: acenar · 2: apontar</div>
+    <div id="gameControls" class="game-panel"><strong>Controles</strong><br>W, A, S, D: andar<br>Shift: correr<br>E ou clique: interagir<br>1: acenar · 2: apontar<br><small>O teclado fica dedicado ao jogo enquanto esta tela estiver ativa.</small></div>
     <div id="playersPanel" class="game-panel"><strong>Participantes</strong><ol id="playersList"></ol></div>
     <button id="exitGame" class="danger">Sair</button>
     <div id="crosshair"></div>
@@ -350,6 +352,7 @@ const avatarInputs = {
   skin: $('#avatarSkin'),
   hairStyle: $('#avatarHairStyle'),
   hair: $('#avatarHair'),
+  shirtStyle: $('#avatarShirtStyle'),
   shirt: $('#avatarShirt'),
   pants: $('#avatarPants'),
   shoes: $('#avatarShoes'),
@@ -374,6 +377,8 @@ scene.fog = new THREE.Fog(0xbcc7c4, 65, 180);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.domElement.className = 'webgl';
+renderer.domElement.tabIndex = 0;
+renderer.domElement.setAttribute('aria-label', 'Área 3D do simulador');
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
@@ -396,8 +401,8 @@ perspectiveControls.maxPolarAngle = Math.PI / 2 - 0.03;
 perspectiveControls.minDistance = 2;
 perspectiveControls.maxDistance = 120;
 perspectiveControls.enabled = false;
-perspectiveControls.mouseButtons.LEFT = -1;
-perspectiveControls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
+perspectiveControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+perspectiveControls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
 perspectiveControls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
 
 const mapControls = new MapControls(topCamera, renderer.domElement);
@@ -407,7 +412,7 @@ mapControls.screenSpacePanning = true;
 mapControls.minZoom = 0.35;
 mapControls.maxZoom = 8;
 mapControls.enabled = false;
-mapControls.mouseButtons.LEFT = -1;
+mapControls.mouseButtons.LEFT = THREE.MOUSE.PAN;
 mapControls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
 mapControls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
 
@@ -473,6 +478,8 @@ let lastMoveSent = 0;
 let lastPresenceSent = 0;
 let toastTimer = null;
 let interactionRoot = null;
+let canvasPointerStart = null;
+let canvasPointerMoved = false;
 const remotePlayers = new Map();
 const keys = new Set();
 const raycaster = new THREE.Raycaster();
@@ -1002,14 +1009,26 @@ function showSegmentPreview(start, end, kind, reason = '') {
   measurementBadge.classList.remove('hidden');
 }
 
+function updateBuilderControlBindings() {
+  const enabled = appMode === 'builder' && !transform.dragging;
+  const allowLeftCamera = currentTool === 'select';
+  mapControls.enabled = enabled && builderView === 'top';
+  perspectiveControls.enabled = enabled && builderView === 'perspective';
+  mapControls.mouseButtons.LEFT = allowLeftCamera ? THREE.MOUSE.PAN : -1;
+  perspectiveControls.mouseButtons.LEFT = allowLeftCamera ? THREE.MOUSE.ROTATE : -1;
+}
+
 function setTool(tool) {
   currentTool = tool;
   segmentStart = null;
   cableStart = null;
+  canvasPointerStart = null;
+  canvasPointerMoved = false;
   clearPreview();
+  updateBuilderControlBindings();
   $$('[data-tool]').forEach((button) => button.classList.toggle('active', button.dataset.tool === tool));
-  if (tool === 'select') setBuilderStatus('Selecione objetos. Shift seleciona vários.');
-  else if (['wall', 'road', 'sidewalk'].includes(tool)) setBuilderStatus(`Clique no início e no final: ${objectLabel(tool)}.`);
+  if (tool === 'select') setBuilderStatus('Clique para selecionar. Arraste com o botão esquerdo para mover a câmera.');
+  else if (['wall', 'road', 'sidewalk'].includes(tool)) setBuilderStatus(`Clique no início e no final: ${objectLabel(tool)}. Use o botão direito para mover a câmera.`);
   else if (tool === 'cable') setBuilderStatus('Clique no primeiro e depois no segundo equipamento de rede.');
 }
 
@@ -1073,8 +1092,14 @@ function handleCableClick(root) {
 renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
 renderer.domElement.addEventListener('pointerdown', (event) => {
   if (appMode !== 'builder' || transform.dragging || transform.axis || event.button !== 0) return;
-  const root = pickedRoot(event);
 
+  if (currentTool === 'select') {
+    canvasPointerStart = { x: event.clientX, y: event.clientY };
+    canvasPointerMoved = false;
+    return;
+  }
+
+  const root = pickedRoot(event);
   if (['wall', 'road', 'sidewalk'].includes(currentTool)) {
     const raw = groundPoint(event);
     if (!raw) return;
@@ -1107,13 +1132,14 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
       if (created) addRoot(created, `${objectLabel(kind)} adicionado`);
     }
     setTool('select');
-    return;
   }
-
-  selectObject(root, event.shiftKey);
 });
 
 renderer.domElement.addEventListener('pointermove', (event) => {
+  if (canvasPointerStart && currentTool === 'select') {
+    const distance = Math.hypot(event.clientX - canvasPointerStart.x, event.clientY - canvasPointerStart.y);
+    if (distance > 5) canvasPointerMoved = true;
+  }
   if (appMode !== 'builder' || !segmentStart || !['wall', 'road', 'sidewalk'].includes(currentTool)) return;
   const raw = groundPoint(event);
   if (!raw) return;
@@ -1121,10 +1147,21 @@ renderer.domElement.addEventListener('pointermove', (event) => {
   showSegmentPreview(segmentStart, snapped.point, currentTool, snapped.reason);
 });
 
-transform.addEventListener('dragging-changed', (event) => {
-  const enabled = !event.value && appMode === 'builder';
-  if (builderView === 'top') mapControls.enabled = enabled;
-  else perspectiveControls.enabled = enabled;
+renderer.domElement.addEventListener('pointerup', (event) => {
+  if (appMode !== 'builder' || event.button !== 0 || currentTool !== 'select' || !canvasPointerStart) return;
+  const wasClick = !canvasPointerMoved;
+  canvasPointerStart = null;
+  canvasPointerMoved = false;
+  if (wasClick && !transform.dragging && !transform.axis) selectObject(pickedRoot(event), event.shiftKey);
+});
+
+renderer.domElement.addEventListener('pointercancel', () => {
+  canvasPointerStart = null;
+  canvasPointerMoved = false;
+});
+
+transform.addEventListener('dragging-changed', () => {
+  updateBuilderControlBindings();
 });
 
 transform.addEventListener('mouseDown', () => {
@@ -1185,6 +1222,7 @@ function setBuilderView(view) {
     perspectiveControls.enabled = appMode === 'builder';
     mapControls.enabled = false;
   }
+  updateBuilderControlBindings();
   transform.camera = activeBuilderCamera;
   attachTransform();
   $('#topView').classList.toggle('active', view === 'top');
@@ -1193,6 +1231,8 @@ function setBuilderView(view) {
 
 function showHome() {
   appMode = 'home';
+  keys.clear();
+  document.body.classList.remove('game-keyboard-captured');
   document.exitPointerLock?.();
   mapControls.enabled = false;
   perspectiveControls.enabled = false;
@@ -1437,6 +1477,8 @@ function startGame() {
     if (['door', 'slidingGate'].includes(root.userData.kind)) setOpeningOpen(root, false);
   }
   appMode = 'game';
+  keys.clear();
+  document.body.classList.add('game-keyboard-captured');
   homeOverlay.classList.add('hidden');
   builderUi.classList.add('hidden');
   gameUi.classList.remove('hidden');
@@ -1449,6 +1491,7 @@ function startGame() {
   gameCamera.position.set(localPlayer?.x ?? 0, 1.7, localPlayer?.z ?? 12);
   gameCamera.rotation.set(0, localPlayer?.ry ?? 0, 0);
   updatePlayersList();
+  renderer.domElement.focus({ preventScroll: true });
   setTimeout(() => pointerControls.lock(), 100);
 }
 
@@ -1687,8 +1730,30 @@ $('#collapseTools').addEventListener('click', () => {
 
 renderer.domElement.addEventListener('click', () => {
   if (appMode !== 'game') return;
+  renderer.domElement.focus({ preventScroll: true });
   if (!pointerControls.isLocked) pointerControls.lock();
   else gameInteraction();
+});
+
+const GAME_CAPTURED_CODES = new Set([
+  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'ShiftLeft', 'ShiftRight',
+  'Digit1', 'Digit2', 'Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Backspace', 'Home', 'End', 'PageUp', 'PageDown', 'Slash', 'F1', 'F3', 'F5', 'F7', 'F10',
+]);
+
+function preventBrowserCommandWhilePlaying(event) {
+  if (appMode !== 'game' || event.code === 'Escape') return;
+  if (GAME_CAPTURED_CODES.has(event.code) || event.ctrlKey || event.metaKey || event.altKey) {
+    event.preventDefault();
+  }
+}
+
+addEventListener('keydown', preventBrowserCommandWhilePlaying, { capture: true });
+addEventListener('keyup', preventBrowserCommandWhilePlaying, { capture: true });
+addEventListener('blur', () => keys.clear());
+document.addEventListener('visibilitychange', () => { if (document.hidden) keys.clear(); });
+document.addEventListener('pointerlockchange', () => {
+  if (appMode === 'game' && !pointerControls.isLocked) keys.clear();
 });
 
 addEventListener('keydown', (event) => {
