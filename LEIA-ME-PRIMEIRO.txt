@@ -1,4 +1,0 @@
-1. Abra o arquivo README.md para ver o passo a passo.
-2. O construtor agora é totalmente 3D.
-3. O modo jogar continua em primeira pessoa e possui salas online.
-4. A planta enviada no Paint já está incluída em public/planta-referencia.png.
