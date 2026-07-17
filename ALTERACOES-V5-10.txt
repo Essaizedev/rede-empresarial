@@ -1,0 +1,24 @@
+VERSÃO V5.10 — FÍSICA DE ESCADA, CÁPSULA E ENCAIXE AO GIRAR
+
+Física:
+- Escadas usam uma rampa física invisível sobre os degraus.
+- Quedas são verificadas em passos menores e com detecção contínua.
+- O personagem usa colisão arredondada semelhante a uma cápsula.
+- É possível pousar em escadas, paredes, pisos, lajes e tetos sem atravessar.
+- Escadas rotacionadas continuam com superfície física correta.
+
+Construtor:
+- Ao aproximar e girar móveis/equipamentos perto de uma parede, o sistema detecta,
+  alinha a rotação e encosta o objeto sem atravessar a parede.
+- Objetos reconhecem piso, laje, teto e escada próximos e apoiam a base na superfície.
+- Computadores, televisões e equipamentos pequenos podem se apoiar em mesa,
+  armário, estante ou rack.
+- Durante a rotação, o editor avisa quando uma parede foi detectada.
+
+Visual:
+- Novo perfil “Realista — apresentação”.
+- Iluminação, sombras, tone mapping e materiais melhorados.
+- O perfil é opcional; Econômico continua sendo o padrão.
+
+Atualização rápida:
+substitua src/main.js e src/objects.js.

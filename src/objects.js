@@ -1109,7 +1109,8 @@ function createCarport(position, options = {}) {
 
 function createStairs(position, options = {}) {
   const root = setupRoot(new THREE.Group(), 'stairs', { ...options, color: options.color || '#989891' });
-  const steps = Number(options.steps) || 9;
+  const steps = Math.max(2, Number(options.steps) || 9);
+  root.userData.stairSteps = steps;
   root.userData.dimensions = { width: Number(options.width) || 1.6, height: Number(options.height) || 1.62, depth: Number(options.depth) || steps * 0.38 };
   root.userData.collisionPieces = [];
   for (let index = 0; index < steps; index += 1) {

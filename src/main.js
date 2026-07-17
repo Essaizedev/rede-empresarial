@@ -342,7 +342,7 @@ app.innerHTML = `
 
       <details>
         <summary>Gráficos e desempenho</summary>
-        <div class="field"><label>Qualidade<select class="graphics-quality"><option value="low">Econômico — recomendado</option><option value="medium">Equilibrado</option><option value="high">Alto</option></select></label></div>
+        <div class="field"><label>Qualidade<select class="graphics-quality"><option value="low">Econômico — recomendado</option><option value="medium">Equilibrado</option><option value="high">Alto</option><option value="realistic">Realista — apresentação</option></select></label></div>
         <label class="check"><input class="shadows-toggle" type="checkbox" /> Ativar sombras</label>
         <div class="field"><label>Sensibilidade do mouse <span class="sensitivity-value">1,00</span><input class="sensitivity-control" type="range" min="0.25" max="2.5" step="0.05" value="1" /></label></div>
         <p class="help-text">O modo Econômico reduz resolução e limita a renderização para funcionar melhor em computadores escolares.</p>
@@ -465,7 +465,7 @@ app.innerHTML = `
     <div id="playersPanel" class="game-panel"><strong>Participantes</strong><ol id="playersList"></ol></div>
     <div id="gameSettings" class="game-panel">
       <strong>Gráficos</strong>
-      <label>Qualidade<select class="graphics-quality"><option value="low">Econômico</option><option value="medium">Equilibrado</option><option value="high">Alto</option></select></label>
+      <label>Qualidade<select class="graphics-quality"><option value="low">Econômico</option><option value="medium">Equilibrado</option><option value="high">Alto</option><option value="realistic">Realista — apresentação</option></select></label>
       <label class="game-check"><input class="shadows-toggle" type="checkbox" /> Sombras</label>
       <label>Sensibilidade <span class="sensitivity-value">1,00</span><input class="sensitivity-control" type="range" min="0.25" max="2.5" step="0.05" value="1" /></label>
       <small>Pressione Esc para liberar o mouse e alterar.</small>
@@ -566,7 +566,7 @@ if (!supabase) {
 
 let savedPerformance = {};
 try { savedPerformance = JSON.parse(localStorage.getItem('empresa3d-performance-v3') || '{}'); } catch { savedPerformance = {}; }
-const initialQuality = ['low', 'medium', 'high'].includes(savedPerformance.quality) ? savedPerformance.quality : 'low';
+const initialQuality = ['low', 'medium', 'high', 'realistic'].includes(savedPerformance.quality) ? savedPerformance.quality : 'low';
 const initialShadows = Boolean(savedPerformance.shadows);
 const initialSensitivity = THREE.MathUtils.clamp(Number(savedPerformance.sensitivity) || 1, 0.25, 2.5);
 
@@ -574,14 +574,14 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xbcc7c4);
 scene.fog = new THREE.Fog(0xbcc7c4, 65, 180);
 
-const renderer = new THREE.WebGLRenderer({ antialias: initialQuality === 'high', powerPreference: 'high-performance', precision: 'mediump' });
+const renderer = new THREE.WebGLRenderer({ antialias: ['high', 'realistic'].includes(initialQuality), powerPreference: 'high-performance', precision: initialQuality === 'realistic' ? 'highp' : 'mediump' });
 renderer.domElement.className = 'webgl';
 renderer.domElement.tabIndex = 0;
 renderer.domElement.setAttribute('aria-label', 'Área 3D do simulador');
-renderer.setPixelRatio(Math.min(devicePixelRatio, initialQuality === 'high' ? 1.5 : initialQuality === 'medium' ? 1 : 0.75));
+renderer.setPixelRatio(Math.min(devicePixelRatio, initialQuality === 'realistic' ? 1.75 : initialQuality === 'high' ? 1.5 : initialQuality === 'medium' ? 1 : 0.75));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = initialShadows;
-renderer.shadowMap.type = initialQuality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+renderer.shadowMap.type = ['high', 'realistic'].includes(initialQuality) ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 renderer.shadowMap.autoUpdate = initialShadows;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 app.prepend(renderer.domElement);
@@ -628,11 +628,12 @@ transform.setTranslationSnap(0.25);
 transform.setRotationSnap(THREE.MathUtils.degToRad(5));
 scene.add(transform.getHelper());
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x59635e, 2.25));
+const skyLight = new THREE.HemisphereLight(0xffffff, 0x59635e, 2.25);
+scene.add(skyLight);
 const sun = new THREE.DirectionalLight(0xfff3d4, 3.2);
 sun.position.set(-25, 36, 18);
 sun.castShadow = initialShadows;
-sun.shadow.mapSize.set(initialQuality === 'high' ? 2048 : initialQuality === 'medium' ? 1024 : 512, initialQuality === 'high' ? 2048 : initialQuality === 'medium' ? 1024 : 512);
+sun.shadow.mapSize.set(initialQuality === 'realistic' ? 3072 : initialQuality === 'high' ? 2048 : initialQuality === 'medium' ? 1024 : 512, initialQuality === 'realistic' ? 3072 : initialQuality === 'high' ? 2048 : initialQuality === 'medium' ? 1024 : 512);
 sun.shadow.camera.left = -70;
 sun.shadow.camera.right = 70;
 sun.shadow.camera.top = 70;
@@ -832,6 +833,139 @@ function snapRootToGuides(root) {
   updateAlignmentGuides(root);
 }
 
+const ENVIRONMENT_SNAP_EXCLUDED = new Set([
+  'wall', 'glassWall', 'glassPanel', 'door', 'window', 'slidingGate',
+  'road', 'sidewalk', 'parking', 'grass', 'floorSlab', 'roof', 'carport',
+  'stairs', 'spawnPoint', 'cable', 'car', 'motorcycle',
+]);
+
+const WALL_FRIENDLY_KINDS = new Set([
+  'table', 'chair', 'cabinet', 'shelf', 'computer', 'laptop', 'printer',
+  'network', 'switch', 'router', 'rack', 'server', 'documentationTerminal',
+  'television',
+]);
+
+const STACKABLE_KINDS = new Set([
+  'computer', 'laptop', 'printer', 'network', 'switch', 'router',
+  'server', 'documentationTerminal', 'television',
+]);
+
+function normalizedAngle(value) {
+  return Math.atan2(Math.sin(value), Math.cos(value));
+}
+
+function closestParallelAngle(current, base) {
+  const candidates = [base, base + Math.PI, base - Math.PI];
+  return candidates.reduce((best, candidate) => (
+    Math.abs(normalizedAngle(candidate - current)) < Math.abs(normalizedAngle(best - current))
+      ? candidate
+      : best
+  ), candidates[0]);
+}
+
+function builderSurfaceHeightAt(root, point) {
+  let best = 0;
+  for (const candidate of world.children) {
+    if (candidate === root || candidate.userData.hidden) continue;
+    const kind = candidate.userData.kind;
+    if (['floorSlab', 'roof', 'stairs'].includes(kind)) {
+      const height = surfaceHeightForRoot(candidate, point);
+      if (height != null && height > best) best = height;
+      continue;
+    }
+    if (!STACKABLE_KINDS.has(root.userData.kind) || !['table', 'cabinet', 'shelf', 'rack'].includes(kind)) continue;
+    const box = new THREE.Box3().setFromObject(candidate);
+    if (point.x >= box.min.x - 0.03 && point.x <= box.max.x + 0.03
+      && point.z >= box.min.z - 0.03 && point.z <= box.max.z + 0.03
+      && box.max.y > best) {
+      best = box.max.y;
+    }
+  }
+  return best;
+}
+
+function snapObjectToNearbySurface(root, tolerance = 0.42) {
+  if (!root || ENVIRONMENT_SNAP_EXCLUDED.has(root.userData.kind)) return false;
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root);
+  if (box.isEmpty()) return false;
+  const center = box.getCenter(new THREE.Vector3());
+  const support = builderSurfaceHeightAt(root, center);
+  const gap = box.min.y - support;
+  if (Math.abs(gap) > tolerance || box.max.y < support + 0.01) return false;
+  root.position.y -= gap;
+  root.updateMatrixWorld(true);
+  return true;
+}
+
+function wallSnapCandidate(root) {
+  if (!root || !WALL_FRIENDLY_KINDS.has(root.userData.kind)) return null;
+  const dimensions = getObjectDimensions(root);
+  const nearest = findNearestWall(root.position, world, Math.max(0.7, (Number(dimensions.depth) || 0.5) / 2 + 0.55));
+  if (!nearest) return null;
+  const thickness = Math.max(0.05, Number(nearest.wall.userData.segment?.thickness) || 0.16);
+  const depth = Math.max(0.04, Number(dimensions.depth) || 0.5);
+  const threshold = thickness / 2 + depth / 2 + 0.42;
+  if (nearest.distance > threshold) return null;
+  return { ...nearest, thickness, depth };
+}
+
+function showEnvironmentSnapHint(root) {
+  if (!settings.smartSnap || transform.getMode() !== 'rotate') return;
+  const candidate = wallSnapCandidate(root);
+  if (!candidate) return;
+  showSnapMarker(candidate.point, 'parede detectada');
+  setBuilderStatus('Parede detectada: solte para alinhar e encostar o objeto.');
+}
+
+function snapObjectToEnvironment(root, { wall = true, surface = true } = {}) {
+  if (!settings.smartSnap || !root || ENVIRONMENT_SNAP_EXCLUDED.has(root.userData.kind)) {
+    return { wall: false, surface: false };
+  }
+
+  let wallSnapped = false;
+  let surfaceSnapped = false;
+
+  if (wall) {
+    const candidate = wallSnapCandidate(root);
+    if (candidate) {
+      const wallAngle = candidate.wall.rotation.y;
+      const targetAngle = closestParallelAngle(root.rotation.y, wallAngle);
+      const angleDifference = Math.abs(normalizedAngle(targetAngle - root.rotation.y));
+      const closeEnoughToAngle = angleDifference <= THREE.MathUtils.degToRad(24);
+      const veryCloseToWall = candidate.distance <= candidate.thickness / 2 + candidate.depth / 2 + 0.16;
+
+      if (closeEnoughToAngle || veryCloseToWall) {
+        root.rotation.y = targetAngle;
+        root.updateMatrixWorld(true);
+
+        const info = candidate.info;
+        const delta = new THREE.Vector2(
+          root.position.x - candidate.point.x,
+          root.position.z - candidate.point.z,
+        );
+        let side = Math.sign(delta.dot(info.normal));
+        if (!side) side = 1;
+        const distance = candidate.thickness / 2 + candidate.depth / 2 + 0.015;
+        root.position.x = candidate.point.x + info.normal.x * side * distance;
+        root.position.z = candidate.point.z + info.normal.y * side * distance;
+        root.updateMatrixWorld(true);
+        wallSnapped = true;
+      }
+    }
+  }
+
+  if (surface) surfaceSnapped = snapObjectToNearbySurface(root);
+
+  if (wallSnapped || surfaceSnapped) {
+    const labels = [];
+    if (wallSnapped) labels.push('alinhado e encostado na parede');
+    if (surfaceSnapped) labels.push('apoiado na superfície');
+    setBuilderStatus(`Encaixe inteligente: ${labels.join(' e ')}.`);
+  }
+  return { wall: wallSnapped, surface: surfaceSnapped };
+}
+
 function createFirstPersonBody() {
   const group = new THREE.Group();
   group.name = 'first-person-body';
@@ -1014,6 +1148,7 @@ const QUALITY_PROFILES = {
   low: { pixelRatio: 0.75, shadowSize: 512, renderInterval: 1000 / 30, fogFar: 135 },
   medium: { pixelRatio: 1, shadowSize: 1024, renderInterval: 1000 / 45, fogFar: 165 },
   high: { pixelRatio: 1.5, shadowSize: 2048, renderInterval: 0, fogFar: 190 },
+  realistic: { pixelRatio: 1.75, shadowSize: 3072, renderInterval: 0, fogFar: 225 },
 };
 
 const SHADOW_KINDS = new Set(['wall', 'door', 'slidingGate', 'roof', 'carport', 'table', 'chair', 'cabinet', 'shelf', 'rack', 'server', 'documentationTerminal', 'television', 'stairs']);
@@ -1044,7 +1179,7 @@ function applyPerformanceSettings({ persist = true } = {}) {
   renderer.setSize(innerWidth, innerHeight, false);
   renderer.shadowMap.enabled = settings.shadows;
   renderer.shadowMap.autoUpdate = settings.shadows;
-  renderer.shadowMap.type = settings.quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+  renderer.shadowMap.type = ['high', 'realistic'].includes(settings.quality) ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   sun.castShadow = settings.shadows;
   sun.shadow.mapSize.set(profile.shadowSize, profile.shadowSize);
   if (sun.shadow.map) {
@@ -1053,6 +1188,12 @@ function applyPerformanceSettings({ persist = true } = {}) {
   }
   floor.receiveShadow = settings.shadows;
   scene.fog.far = profile.fogFar;
+  renderer.toneMapping = ['high', 'realistic'].includes(settings.quality) ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+  renderer.toneMappingExposure = settings.quality === 'realistic' ? 1.12 : settings.quality === 'high' ? 1.05 : 1;
+  skyLight.intensity = settings.quality === 'realistic' ? 2.65 : 2.25;
+  sun.intensity = settings.quality === 'realistic' ? 3.75 : 3.2;
+  scene.background.set(settings.quality === 'realistic' ? 0xcbd8dc : 0xbcc7c4);
+  scene.fog.color.copy(scene.background);
   pointerControls.pointerSpeed = settings.sensitivity;
   perspectiveControls.rotateSpeed = 0.65 * settings.sensitivity;
   perspectiveControls.panSpeed = 0.75 * settings.sensitivity;
@@ -1061,8 +1202,24 @@ function applyPerformanceSettings({ persist = true } = {}) {
   for (const avatar of avatarLayer.children) {
     avatar.traverse((child) => {
       if (!child.isMesh) return;
-      child.castShadow = settings.shadows && settings.quality === 'high';
+      child.castShadow = settings.shadows && ['high', 'realistic'].includes(settings.quality);
       child.receiveShadow = false;
+    });
+  }
+  for (const root of world.children) {
+    root.traverse((child) => {
+      const materials = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
+      for (const material of materials) {
+        if (!material || !('roughness' in material)) continue;
+        if (['glassPanel', 'glassWall', 'window'].includes(root.userData.kind)) {
+          material.roughness = settings.quality === 'realistic' ? 0.08 : 0.20;
+          material.metalness = settings.quality === 'realistic' ? 0.08 : 0.02;
+          material.needsUpdate = true;
+        } else if (settings.quality === 'realistic' && ['car', 'motorcycle', 'rack', 'server', 'television'].includes(root.userData.kind)) {
+          material.roughness = Math.min(material.roughness, 0.42);
+          material.metalness = Math.max(material.metalness, 0.18);
+        }
+      }
     });
   }
   syncPerformanceControls();
@@ -1076,7 +1233,7 @@ function applyPerformanceSettings({ persist = true } = {}) {
 }
 
 function setPerformanceQuality(value) {
-  settings.quality = ['low', 'medium', 'high'].includes(value) ? value : 'low';
+  settings.quality = ['low', 'medium', 'high', 'realistic'].includes(value) ? value : 'low';
   applyPerformanceSettings();
 }
 
@@ -1635,6 +1792,8 @@ function applyProperties() {
     if (OPENING_KINDS.has(kind)) {
       const result = snapOpeningToWall(root, world, root.position, { maxDistance: 3, grid: settings.grid });
       if (!result.ok) setBuilderStatus(result.reason);
+    } else {
+      snapObjectToEnvironment(root, { wall: true, surface: true });
     }
   }
 
@@ -1693,6 +1852,7 @@ function moveSelectedBy(dx, dz) {
       root.position.x += dx;
       root.position.z += dz;
       if (OPENING_KINDS.has(root.userData.kind)) snapOpeningToWall(root, world, root.position, { maxDistance: 2.5, grid: settings.grid });
+      else snapObjectToEnvironment(root, { wall: true, surface: true });
     }
   }
   updateAllCables(world);
@@ -2302,6 +2462,7 @@ transform.addEventListener('objectChange', () => {
     syncPropertiesForm();
   }
   updateAlignmentGuides(selected, { allowTranslateSnap: true });
+  showEnvironmentSnapHint(selected);
   refreshSelectionHelpers();
   updateAllCables(world);
 });
@@ -2327,6 +2488,7 @@ transform.addEventListener('mouseUp', () => {
     }
     const resized = resizeObject(selected, nextDimensions, world);
     snapRootToGuides(selected);
+    snapObjectToEnvironment(selected, { wall: false, surface: true });
     if (resized?.adjusted) setBuilderStatus('O tamanho foi ajustado automaticamente ao espaço livre da parede.');
   } else if (SEGMENT_KINDS.has(selected.userData.kind)) {
     applySegmentTransform(selected, transformStartState.segment, world);
@@ -2345,6 +2507,10 @@ transform.addEventListener('mouseUp', () => {
     selected.position.x = snapGrid(selected.position.x);
     selected.position.z = snapGrid(selected.position.z);
     snapRootToGuides(selected);
+    snapObjectToEnvironment(selected, {
+      wall: ['rotate', 'translate'].includes(mode),
+      surface: true,
+    });
   }
   transformStartState = null;
   clearAlignmentGuides();
@@ -2499,7 +2665,7 @@ function makeRemoteAvatar(player) {
   avatarLayer.add(root);
   root.traverse((child) => {
     if (!child.isMesh) return;
-    child.castShadow = settings.shadows && settings.quality === 'high';
+    child.castShadow = settings.shadows && ['high', 'realistic'].includes(settings.quality);
     child.receiveShadow = false;
   });
   return root;
@@ -3129,6 +3295,9 @@ function rebuildGameCaches() {
     const kind = root.userData.kind;
     if (kind === 'door' || kind === 'slidingGate') {
       dynamicCollisionRoots.push(root);
+    } else if (kind === 'stairs') {
+      // A escada usa uma rampa física invisível. Os degraus continuam visuais,
+      // mas não criam quinas que prendem ou atravessam o personagem.
     } else if (root.userData.collisionPieces?.length) {
       addCollisionPieces(root);
     } else if (staticKinds.has(kind)) {
@@ -3161,21 +3330,41 @@ function surfaceHeightForRoot(root, worldPosition) {
     const width = Number(dimensions.width) || 1.6;
     const height = Number(dimensions.height) || 1.62;
     const depth = Number(dimensions.depth) || 3.42;
-    const steps = Math.max(1, root.children.filter((child) => child.isMesh).length || 9);
+    const steps = Math.max(1, Number(root.userData.stairSteps) || root.children.filter((child) => child.isMesh).length || 9);
     const stepDepth = depth / steps;
-    if (Math.abs(local.x) <= width / 2 + 0.03 && local.z <= stepDepth / 2 + 0.03 && local.z >= -depth + stepDepth / 2 - 0.03) {
-      const index = THREE.MathUtils.clamp(Math.floor((-local.z + stepDepth / 2) / stepDepth), 0, steps - 1);
-      return root.position.y + ((index + 1) * height / steps);
+    const front = stepDepth / 2;
+    const back = -depth + stepDepth / 2;
+    if (Math.abs(local.x) <= width / 2 + 0.04 && local.z <= front + 0.04 && local.z >= back - 0.04) {
+      // Rampa de colisão invisível: evita atravessar degraus durante quedas e
+      // deixa a subida estável mesmo com FPS baixo ou escada rotacionada.
+      const progress = THREE.MathUtils.clamp((front - local.z) / Math.max(0.001, front - back), 0, 1);
+      return root.position.y + progress * height;
     }
   }
   return null;
 }
 
 function footprintOverlapsBox(position, box, radius = 0.27) {
-  return position.x + radius > box.min.x
-    && position.x - radius < box.max.x
-    && position.z + radius > box.min.z
-    && position.z - radius < box.max.z;
+  const closestX = THREE.MathUtils.clamp(position.x, box.min.x, box.max.x);
+  const closestZ = THREE.MathUtils.clamp(position.z, box.min.z, box.max.z);
+  const dx = position.x - closestX;
+  const dz = position.z - closestZ;
+  return dx * dx + dz * dz <= radius * radius;
+}
+
+function capsuleIntersectsBox(position, box, radius = 0.285) {
+  const feetY = position.y - 1.7;
+  const bottom = feetY + 0.075;
+  const top = feetY + 1.80;
+  // Uma pequena folga no topo permite pousar exatamente sobre a superfície.
+  if (top <= box.min.y + 0.008 || bottom >= box.max.y - 0.008) return false;
+  return footprintOverlapsBox(position, box, radius);
+}
+
+function sweptLandingHeight(position, fromFeet, toFeet) {
+  const support = supportHeightAt(position, fromFeet + 0.075);
+  if (support >= toFeet - 0.012 && support <= fromFeet + 0.075) return support;
+  return null;
 }
 
 function supportHeightAt(position, maxHeight = Infinity) {
@@ -3256,7 +3445,7 @@ function updatePlayerVertical(delta) {
     playerGrounded = false;
     verticalVelocity = Math.max(-28, verticalVelocity - 18.5 * delta);
     const travel = verticalVelocity * delta;
-    const steps = Math.max(1, Math.ceil(Math.abs(travel) / 0.10));
+    const steps = Math.max(1, Math.ceil(Math.abs(travel) / 0.045));
     const step = travel / steps;
 
     for (let index = 0; index < steps; index += 1) {
@@ -3264,9 +3453,11 @@ function updatePlayerVertical(delta) {
       const next = gameCamera.position.clone();
       next.y += step;
       const nextFeet = next.y - 1.7;
-      const landing = supportHeightAt(next, previousFeet + 0.04);
+      const landing = verticalVelocity <= 0
+        ? sweptLandingHeight(next, previousFeet, nextFeet)
+        : null;
 
-      if (verticalVelocity <= 0 && nextFeet <= landing + 0.005) {
+      if (landing != null) {
         next.y = landing + 1.7;
         gameCamera.position.copy(next);
         verticalVelocity = 0;
@@ -3277,7 +3468,7 @@ function updatePlayerVertical(delta) {
       // Se a caixa do personagem encontrar uma parede durante a queda,
       // aterrissa no topo quando possível; nunca continua dentro do sólido.
       if (collides(next)) {
-        const solidTop = supportHeightAt(next, previousFeet + 0.08);
+        const solidTop = sweptLandingHeight(next, previousFeet, nextFeet) ?? supportHeightAt(next, previousFeet + 0.10);
         if (verticalVelocity <= 0 && solidTop <= previousFeet + 0.08) {
           next.y = solidTop + 1.7;
           gameCamera.position.copy(next);
@@ -3298,18 +3489,15 @@ function updatePlayerVertical(delta) {
 }
 
 function collides(position, ignoredVehicle = activeVehicle) {
-  const feetY = position.y - 1.7;
-  playerCollisionBox.min.set(position.x - 0.29, feetY + 0.08, position.z - 0.29);
-  playerCollisionBox.max.set(position.x + 0.29, feetY + 1.82, position.z + 0.29);
-  for (const box of staticCollisionBoxes) if (box.intersectsBox(playerCollisionBox)) return true;
+  for (const box of staticCollisionBoxes) if (capsuleIntersectsBox(position, box)) return true;
   for (const root of dynamicCollisionRoots) {
     if (root.userData.openProgress > 0.72 || !root.userData.movingPart) continue;
     const box = new THREE.Box3().setFromObject(root.userData.movingPart);
-    if (box.intersectsBox(playerCollisionBox)) return true;
+    if (capsuleIntersectsBox(position, box)) return true;
   }
   for (const vehicle of world.children) {
     if (vehicle === ignoredVehicle || !['car', 'motorcycle'].includes(vehicle.userData.kind)) continue;
-    if (new THREE.Box3().setFromObject(vehicle).intersectsBox(playerCollisionBox)) return true;
+    if (capsuleIntersectsBox(position, new THREE.Box3().setFromObject(vehicle), 0.30)) return true;
   }
   return false;
 }
@@ -3359,7 +3547,7 @@ function sendGesture(type) {
 function initAvatarPreview() {
   const container = $('#avatarPreview');
   const previewRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  previewRenderer.setPixelRatio(Math.min(devicePixelRatio || 1, settings.quality === 'high' ? 1.5 : settings.quality === 'medium' ? 1 : 0.75));
+  previewRenderer.setPixelRatio(Math.min(devicePixelRatio || 1, settings.quality === 'realistic' ? 1.75 : settings.quality === 'high' ? 1.5 : settings.quality === 'medium' ? 1 : 0.75));
   previewRenderer.setSize(210, 220);
   previewRenderer.outputColorSpace = THREE.SRGBColorSpace;
   container.appendChild(previewRenderer.domElement);
