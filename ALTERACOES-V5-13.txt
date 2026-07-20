@@ -1,0 +1,16 @@
+REDE EMPRESA 3D — V5.13
+
+ALINHAMENTO UNIVERSAL
+- O mesmo sistema de encaixe agora é aplicado ao adicionar, mover, girar, redimensionar, duplicar, mover pelo teclado e alterar valores pelo painel.
+- Objetos livres encostam e assumem o ângulo da parede quando entram na zona magnética.
+- A posição ao longo da parede é limitada para o objeto não ultrapassar as pontas.
+- Objetos reconhecem chão, piso, laje, teto, escada, rua, calçada, vaga, área verde e superfícies de móveis/equipamentos compatíveis.
+- O apoio vertical usa nove pontos da base do objeto, evitando alinhamento errado quando apenas o centro está fora da superfície.
+- O encaixe acontece durante o arraste e é confirmado ao soltar.
+- Pisos e superfícies em alturas diferentes são detectados pela proximidade vertical; objetos não são puxados para pavimentos distantes.
+- Portas, janelas, vidraçarias e portões continuam usando o encaixe especializado que abre o vão na parede.
+- Paredes, ruas e calçadas continuam usando guias de ponta, centro e bordas para manter trechos justos.
+
+ARQUIVOS ALTERADOS
+- src/main.js
+- package.json

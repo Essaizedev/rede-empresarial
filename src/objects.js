@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { applyVisualMaterials } from './materials.js';
 
 export const OPENING_KINDS = new Set(['door', 'window', 'glassPanel', 'slidingGate']);
 export const NETWORK_KINDS = new Set(['computer', 'laptop', 'printer', 'network', 'switch', 'router', 'rack', 'server', 'documentationTerminal']);
@@ -104,6 +105,7 @@ export function markRoot(root) {
     child.receiveShadow = child.receiveShadow ?? true;
     child.userData.root = root;
   });
+  applyVisualMaterials(root);
   return root;
 }
 
@@ -135,8 +137,8 @@ export function disposeRoot(root) {
     child.geometry?.dispose?.();
     const disposeMaterial = (material) => {
       if (!material) return;
-      for (const key of ['map', 'alphaMap', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap']) {
-        material[key]?.dispose?.();
+      for (const key of ['map', 'alphaMap', 'normalMap', 'bumpMap', 'roughnessMap', 'metalnessMap', 'emissiveMap']) {
+        if (!material[key]?.userData?.hdShared) material[key]?.dispose?.();
       }
       material.dispose?.();
     };

@@ -1,0 +1,32 @@
+VERSÃO V5.11 — TEXTURAS HD E MATERIAIS MENOS GENÉRICOS
+
+Correção do significado do modo Realista:
+- O modo passou a se chamar "Realista — texturas HD".
+- Não altera somente luz e sombras: aplica materiais de alta definição aos objetos.
+- Texturas procedurais de 1024 × 1024, sem depender de links externos.
+- Repetição proporcional ao tamanho do objeto para evitar textura esticada ou pixelada.
+- Mipmaps, filtragem trilinear e anisotropia para melhorar superfícies vistas de longe ou inclinadas.
+- Antisserrilhamento permanece disponível mesmo quando o site iniciou no modo Econômico.
+
+Materiais distintos adicionados:
+- Reboco/pintura para paredes.
+- Concreto para lajes, tetos e escadas.
+- Asfalto com agregado para ruas e estacionamentos.
+- Blocos/pavers para calçadas.
+- Grama com variação orgânica.
+- Madeira com veios para mesas, armários, estantes e portas.
+- Metal escovado para racks, servidores e equipamentos.
+- Chapa metálica ondulada para portões e alpendres.
+- Tecido para cadeiras.
+- Pintura metálica fina para veículos e eletrônicos.
+
+Desempenho:
+- As texturas HD são carregadas somente no modo Realista.
+- Econômico, Equilibrado e Alto continuam sem o conjunto completo de texturas HD.
+- Os mapas são reutilizados entre objetos para reduzir consumo de memória.
+
+Arquivos alterados/adicionados:
+- src/main.js
+- src/objects.js
+- src/materials.js
+- package.json

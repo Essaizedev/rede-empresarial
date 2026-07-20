@@ -45,6 +45,7 @@ import {
   updateOpeningAnimation,
   updateVehicleAnimation,
 } from './objects.js';
+import { applyStandaloneSurface, applyVisualMaterials, configureVisualMaterials } from './materials.js';
 import './style.css';
 
 const app = document.querySelector('#app');
@@ -257,7 +258,7 @@ app.innerHTML = `
       <details open>
         <summary>Precisão e encaixe</summary>
         <div class="field"><label for="gridSize">Grade</label><select id="gridSize"><option value="0.1">10 cm</option><option value="0.25" selected>25 cm</option><option value="0.5">50 cm</option><option value="1">1 metro</option></select></div>
-        <label class="check"><input id="smartSnap" type="checkbox" checked /> Encaixe inteligente em cantos e paredes</label>
+        <label class="check"><input id="smartSnap" type="checkbox" checked /> Encaixe inteligente em paredes, pisos e superfícies</label>
         <label class="check"><input id="orthogonalMode" type="checkbox" /> Modo ortogonal — somente 0° e 90° (F8)</label>
         <label class="check"><input id="showGrid" type="checkbox" checked /> Mostrar grade</label>
         <label class="check"><input id="showMeasurements" type="checkbox" checked /> Mostrar comprimento e ângulo</label>
@@ -342,7 +343,7 @@ app.innerHTML = `
 
       <details>
         <summary>Gráficos e desempenho</summary>
-        <div class="field"><label>Qualidade<select class="graphics-quality"><option value="low">Econômico — recomendado</option><option value="medium">Equilibrado</option><option value="high">Alto</option><option value="realistic">Realista — apresentação</option></select></label></div>
+        <div class="field"><label>Qualidade<select class="graphics-quality"><option value="low">Econômico — recomendado</option><option value="medium">Equilibrado</option><option value="high">Alto</option><option value="realistic">Realista — texturas HD</option></select></label></div>
         <label class="check"><input class="shadows-toggle" type="checkbox" /> Ativar sombras</label>
         <div class="field"><label>Sensibilidade do mouse <span class="sensitivity-value">1,00</span><input class="sensitivity-control" type="range" min="0.25" max="2.5" step="0.05" value="1" /></label></div>
         <p class="help-text">O modo Econômico reduz resolução e limita a renderização para funcionar melhor em computadores escolares.</p>
@@ -465,7 +466,7 @@ app.innerHTML = `
     <div id="playersPanel" class="game-panel"><strong>Participantes</strong><ol id="playersList"></ol></div>
     <div id="gameSettings" class="game-panel">
       <strong>Gráficos</strong>
-      <label>Qualidade<select class="graphics-quality"><option value="low">Econômico</option><option value="medium">Equilibrado</option><option value="high">Alto</option><option value="realistic">Realista — apresentação</option></select></label>
+      <label>Qualidade<select class="graphics-quality"><option value="low">Econômico</option><option value="medium">Equilibrado</option><option value="high">Alto</option><option value="realistic">Realista — texturas HD</option></select></label>
       <label class="game-check"><input class="shadows-toggle" type="checkbox" /> Sombras</label>
       <label>Sensibilidade <span class="sensitivity-value">1,00</span><input class="sensitivity-control" type="range" min="0.25" max="2.5" step="0.05" value="1" /></label>
       <small>Pressione Esc para liberar o mouse e alterar.</small>
@@ -574,7 +575,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xbcc7c4);
 scene.fog = new THREE.Fog(0xbcc7c4, 65, 180);
 
-const renderer = new THREE.WebGLRenderer({ antialias: ['high', 'realistic'].includes(initialQuality), powerPreference: 'high-performance', precision: initialQuality === 'realistic' ? 'highp' : 'mediump' });
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', precision: initialQuality === 'realistic' ? 'highp' : 'mediump' });
 renderer.domElement.className = 'webgl';
 renderer.domElement.tabIndex = 0;
 renderer.domElement.setAttribute('aria-label', 'Área 3D do simulador');
@@ -835,19 +836,23 @@ function snapRootToGuides(root) {
 
 const ENVIRONMENT_SNAP_EXCLUDED = new Set([
   'wall', 'glassWall', 'glassPanel', 'door', 'window', 'slidingGate',
-  'road', 'sidewalk', 'parking', 'grass', 'floorSlab', 'roof', 'carport',
-  'stairs', 'spawnPoint', 'cable', 'car', 'motorcycle',
+  'road', 'sidewalk', 'cable',
 ]);
 
+// Objetos que podem encostar e assumir automaticamente o ângulo de uma parede.
+// Estruturas maiores, veículos e áreas externas continuam usando as guias de borda,
+// para não serem puxados para uma parede de maneira inesperada.
 const WALL_FRIENDLY_KINDS = new Set([
   'table', 'chair', 'cabinet', 'shelf', 'computer', 'laptop', 'printer',
   'network', 'switch', 'router', 'rack', 'server', 'documentationTerminal',
   'television',
 ]);
 
-const STACKABLE_KINDS = new Set([
-  'computer', 'laptop', 'printer', 'network', 'switch', 'router',
-  'server', 'documentationTerminal', 'television',
+// Superfícies horizontais que podem sustentar outro objeto. Pisos, lajes e escadas
+// usam cálculo próprio; os demais usam o topo real da caixa 3D.
+const BOX_SUPPORT_KINDS = new Set([
+  'wall', 'glassWall', 'road', 'sidewalk', 'parking', 'grass',
+  'table', 'cabinet', 'shelf', 'rack', 'server', 'documentationTerminal',
 ]);
 
 function normalizedAngle(value) {
@@ -863,104 +868,179 @@ function closestParallelAngle(current, base) {
   ), candidates[0]);
 }
 
-function builderSurfaceHeightAt(root, point) {
-  let best = 0;
-  for (const candidate of world.children) {
-    if (candidate === root || candidate.userData.hidden) continue;
-    const kind = candidate.userData.kind;
-    if (['floorSlab', 'roof', 'stairs'].includes(kind)) {
-      const height = surfaceHeightForRoot(candidate, point);
-      if (height != null && height > best) best = height;
-      continue;
-    }
-    if (!STACKABLE_KINDS.has(root.userData.kind) || !['table', 'cabinet', 'shelf', 'rack'].includes(kind)) continue;
-    const box = new THREE.Box3().setFromObject(candidate);
-    if (point.x >= box.min.x - 0.03 && point.x <= box.max.x + 0.03
-      && point.z >= box.min.z - 0.03 && point.z <= box.max.z + 0.03
-      && box.max.y > best) {
-      best = box.max.y;
-    }
-  }
-  return best;
+function objectFootprintSamples(root, box = null) {
+  const bounds = box || new THREE.Box3().setFromObject(root);
+  if (bounds.isEmpty()) return [];
+  const center = bounds.getCenter(new THREE.Vector3());
+  const halfX = Math.max(0.01, (bounds.max.x - bounds.min.x) * 0.42);
+  const halfZ = Math.max(0.01, (bounds.max.z - bounds.min.z) * 0.42);
+  return [
+    new THREE.Vector3(center.x, bounds.min.y, center.z),
+    new THREE.Vector3(center.x - halfX, bounds.min.y, center.z - halfZ),
+    new THREE.Vector3(center.x + halfX, bounds.min.y, center.z - halfZ),
+    new THREE.Vector3(center.x - halfX, bounds.min.y, center.z + halfZ),
+    new THREE.Vector3(center.x + halfX, bounds.min.y, center.z + halfZ),
+    new THREE.Vector3(center.x - halfX, bounds.min.y, center.z),
+    new THREE.Vector3(center.x + halfX, bounds.min.y, center.z),
+    new THREE.Vector3(center.x, bounds.min.y, center.z - halfZ),
+    new THREE.Vector3(center.x, bounds.min.y, center.z + halfZ),
+  ];
 }
 
-function snapObjectToNearbySurface(root, tolerance = 0.42) {
-  if (!root || ENVIRONMENT_SNAP_EXCLUDED.has(root.userData.kind)) return false;
+function surfaceHeightsAt(root, point) {
+  const values = [{ height: 0, support: null, kind: 'ground' }];
+  for (const candidate of world.children) {
+    if (candidate === root || selectedRoots.has(candidate) || candidate.userData.hidden) continue;
+    const kind = candidate.userData.kind;
+
+    if (['floorSlab', 'roof', 'stairs'].includes(kind)) {
+      const height = surfaceHeightForRoot(candidate, point);
+      if (height != null) values.push({ height, support: candidate, kind });
+      continue;
+    }
+
+    if (!BOX_SUPPORT_KINDS.has(kind)) continue;
+    const box = new THREE.Box3().setFromObject(candidate);
+    if (box.isEmpty()) continue;
+    if (point.x >= box.min.x - 0.035 && point.x <= box.max.x + 0.035
+      && point.z >= box.min.z - 0.035 && point.z <= box.max.z + 0.035) {
+      values.push({ height: box.max.y, support: candidate, kind });
+    }
+  }
+  return values;
+}
+
+function surfaceSnapCandidate(root, tolerance = 0.52) {
+  if (!root || ENVIRONMENT_SNAP_EXCLUDED.has(root.userData.kind)) return null;
   root.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(root);
-  if (box.isEmpty()) return false;
-  const center = box.getCenter(new THREE.Vector3());
-  const support = builderSurfaceHeightAt(root, center);
-  const gap = box.min.y - support;
-  if (Math.abs(gap) > tolerance || box.max.y < support + 0.01) return false;
-  root.position.y -= gap;
+  if (box.isEmpty()) return null;
+  const bottom = box.min.y;
+  const grouped = new Map();
+
+  for (const sample of objectFootprintSamples(root, box)) {
+    for (const entry of surfaceHeightsAt(root, sample)) {
+      const delta = entry.height - bottom;
+      if (Math.abs(delta) > tolerance) continue;
+      const key = Math.round(entry.height * 1000);
+      const current = grouped.get(key) || {
+        height: entry.height,
+        delta,
+        count: 0,
+        support: entry.support,
+        kind: entry.kind,
+      };
+      current.count += 1;
+      if (Math.abs(delta) < Math.abs(current.delta)) {
+        current.delta = delta;
+        current.height = entry.height;
+        current.support = entry.support;
+        current.kind = entry.kind;
+      }
+      grouped.set(key, current);
+    }
+  }
+
+  const candidates = [...grouped.values()];
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => (
+    b.count - a.count
+    || Math.abs(a.delta) - Math.abs(b.delta)
+    || b.height - a.height
+  ));
+  return candidates[0];
+}
+
+function snapObjectToNearbySurface(root, tolerance = 0.52) {
+  const candidate = surfaceSnapCandidate(root, tolerance);
+  if (!candidate) return false;
+  if (Math.abs(candidate.delta) <= 1e-5) return false;
+  root.position.y += candidate.delta;
   root.updateMatrixWorld(true);
   return true;
 }
 
-function wallSnapCandidate(root) {
+function wallSnapCandidate(root, tolerance = 0.46) {
   if (!root || !WALL_FRIENDLY_KINDS.has(root.userData.kind)) return null;
   const dimensions = getObjectDimensions(root);
-  const nearest = findNearestWall(root.position, world, Math.max(0.7, (Number(dimensions.depth) || 0.5) / 2 + 0.55));
+  const depth = Math.max(0.04, Number(dimensions.depth) || 0.5);
+  const nearest = findNearestWall(root.position, world, Math.max(0.7, depth / 2 + tolerance + 0.2));
   if (!nearest) return null;
   const thickness = Math.max(0.05, Number(nearest.wall.userData.segment?.thickness) || 0.16);
-  const depth = Math.max(0.04, Number(dimensions.depth) || 0.5);
-  const threshold = thickness / 2 + depth / 2 + 0.42;
+  const threshold = thickness / 2 + depth / 2 + tolerance;
   if (nearest.distance > threshold) return null;
-  return { ...nearest, thickness, depth };
+  return {
+    ...nearest,
+    thickness,
+    depth,
+    width: Math.max(0.05, Number(dimensions.width) || 0.5),
+  };
 }
 
 function showEnvironmentSnapHint(root) {
-  if (!settings.smartSnap || transform.getMode() !== 'rotate') return;
-  const candidate = wallSnapCandidate(root);
-  if (!candidate) return;
-  showSnapMarker(candidate.point, 'parede detectada');
-  setBuilderStatus('Parede detectada: solte para alinhar e encostar o objeto.');
+  if (!settings.smartSnap || !root) return;
+  const mode = transform.getMode();
+  if (!['translate', 'rotate', 'scale'].includes(mode)) return;
+  const wallCandidate = wallSnapCandidate(root);
+  const surfaceCandidate = surfaceSnapCandidate(root, 0.58);
+  if (wallCandidate) showSnapMarker(wallCandidate.point, 'parede detectada');
+  if (!wallCandidate && !surfaceCandidate) return;
+  const labels = [];
+  if (wallCandidate) labels.push('parede');
+  if (surfaceCandidate) labels.push(surfaceCandidate.kind === 'ground' ? 'piso' : 'superfície');
+  setBuilderStatus(`${labels.join(' e ')} detectado${labels.length > 1 ? 's' : ''}: solte para encaixar com precisão.`);
 }
 
-function snapObjectToEnvironment(root, { wall = true, surface = true } = {}) {
-  if (!settings.smartSnap || !root || ENVIRONMENT_SNAP_EXCLUDED.has(root.userData.kind)) {
-    return { wall: false, surface: false };
-  }
+function snapObjectToEnvironment(root, {
+  wall = true,
+  surface = true,
+  silent = false,
+  surfaceTolerance = 0.52,
+  wallTolerance = 0.46,
+} = {}) {
+  if (!settings.smartSnap || !root) return { wall: false, surface: false };
+  if (OPENING_KINDS.has(root.userData.kind)) return { wall: false, surface: false };
 
   let wallSnapped = false;
   let surfaceSnapped = false;
 
   if (wall) {
-    const candidate = wallSnapCandidate(root);
+    const candidate = wallSnapCandidate(root, wallTolerance);
     if (candidate) {
       const wallAngle = candidate.wall.rotation.y;
       const targetAngle = closestParallelAngle(root.rotation.y, wallAngle);
       const angleDifference = Math.abs(normalizedAngle(targetAngle - root.rotation.y));
-      const closeEnoughToAngle = angleDifference <= THREE.MathUtils.degToRad(24);
-      const veryCloseToWall = candidate.distance <= candidate.thickness / 2 + candidate.depth / 2 + 0.16;
+      const closeEnoughToAngle = angleDifference <= THREE.MathUtils.degToRad(28);
+      const veryCloseToWall = candidate.distance <= candidate.thickness / 2 + candidate.depth / 2 + 0.18;
 
       if (closeEnoughToAngle || veryCloseToWall) {
         root.rotation.y = targetAngle;
         root.updateMatrixWorld(true);
 
         const info = candidate.info;
-        const delta = new THREE.Vector2(
-          root.position.x - candidate.point.x,
-          root.position.z - candidate.point.z,
-        );
+        const halfWidth = Math.min(candidate.width / 2, info.length / 2);
+        const offset = info.length > candidate.width
+          ? THREE.MathUtils.clamp(candidate.offset, halfWidth, info.length - halfWidth)
+          : info.length / 2;
+        const point = info.a.clone().add(info.tangent.clone().multiplyScalar(offset));
+        const delta = new THREE.Vector2(root.position.x - point.x, root.position.z - point.y);
         let side = Math.sign(delta.dot(info.normal));
         if (!side) side = 1;
-        const distance = candidate.thickness / 2 + candidate.depth / 2 + 0.015;
-        root.position.x = candidate.point.x + info.normal.x * side * distance;
-        root.position.z = candidate.point.z + info.normal.y * side * distance;
+        const distance = candidate.thickness / 2 + candidate.depth / 2 + 0.012;
+        root.position.x = point.x + info.normal.x * side * distance;
+        root.position.z = point.y + info.normal.y * side * distance;
         root.updateMatrixWorld(true);
         wallSnapped = true;
       }
     }
   }
 
-  if (surface) surfaceSnapped = snapObjectToNearbySurface(root);
+  if (surface) surfaceSnapped = snapObjectToNearbySurface(root, surfaceTolerance);
 
-  if (wallSnapped || surfaceSnapped) {
+  if (!silent && (wallSnapped || surfaceSnapped)) {
     const labels = [];
     if (wallSnapped) labels.push('alinhado e encostado na parede');
-    if (surfaceSnapped) labels.push('apoiado na superfície');
+    if (surfaceSnapped) labels.push('apoiado exatamente no piso ou superfície');
     setBuilderStatus(`Encaixe inteligente: ${labels.join(' e ')}.`);
   }
   return { wall: wallSnapped, surface: surfaceSnapped };
@@ -1060,6 +1140,7 @@ const selectionHelpers = new Map();
 let selectionDrag = null;
 let transformStartState = null;
 let alignmentAdjusting = false;
+let environmentAdjusting = false;
 let realtimeChannel = null;
 let currentRoom = '';
 let localPlayer = null;
@@ -1079,6 +1160,7 @@ const explicitlyDepartedPlayers = new Set();
 const keys = new Set();
 let staticCollisionBoxes = [];
 let dynamicCollisionRoots = [];
+let stairCollisionRoots = [];
 let interactionMeshes = [];
 let currentGroundHeight = 0;
 let lastInteractionCheck = 0;
@@ -1163,6 +1245,7 @@ function applyShadowFlagsToRoot(root) {
     child.castShadow = eligible;
     child.receiveShadow = settings.shadows && root.userData.kind !== 'cable';
   });
+  applyVisualMaterials(root);
 }
 
 function syncPerformanceControls() {
@@ -1180,6 +1263,10 @@ function applyPerformanceSettings({ persist = true } = {}) {
   renderer.shadowMap.enabled = settings.shadows;
   renderer.shadowMap.autoUpdate = settings.shadows;
   renderer.shadowMap.type = ['high', 'realistic'].includes(settings.quality) ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+  configureVisualMaterials({
+    enabled: settings.quality === 'realistic',
+    anisotropy: settings.quality === 'realistic' ? Math.min(16, renderer.capabilities.getMaxAnisotropy()) : 1,
+  });
   sun.castShadow = settings.shadows;
   sun.shadow.mapSize.set(profile.shadowSize, profile.shadowSize);
   if (sun.shadow.map) {
@@ -1187,6 +1274,7 @@ function applyPerformanceSettings({ persist = true } = {}) {
     sun.shadow.map = null;
   }
   floor.receiveShadow = settings.shadows;
+  applyStandaloneSurface(floor, 'concrete');
   scene.fog.far = profile.fogFar;
   renderer.toneMapping = ['high', 'realistic'].includes(settings.quality) ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
   renderer.toneMappingExposure = settings.quality === 'realistic' ? 1.12 : settings.quality === 'high' ? 1.05 : 1;
@@ -1388,6 +1476,22 @@ function addRoot(root, label = 'Objeto adicionado') {
   if (root.userData.kind === 'wall') rebuildWall(root, world);
   else if (root.userData.kind === 'glassWall') rebuildGlassWall(root);
   if (root.userData.kind === 'cable') updateAllCables(world);
+
+  // Toda criação passa pelo mesmo encaixe usado ao mover, girar e redimensionar.
+  // Assim o objeto já nasce alinhado à grade, à parede e ao piso disponível.
+  if (!SEGMENT_KINDS.has(root.userData.kind)
+    && !OPENING_KINDS.has(root.userData.kind)
+    && root.userData.kind !== 'cable') {
+    snapRootToGuides(root);
+    snapObjectToEnvironment(root, {
+      wall: true,
+      surface: true,
+      silent: true,
+      surfaceTolerance: 0.68,
+      wallTolerance: 0.55,
+    });
+  }
+
   selectOnly(root);
   commitHistory(label);
   refreshValidation();
@@ -1781,6 +1885,7 @@ function applyProperties() {
       root.userData.segment.width = Math.max(0.2, dimensions.depth);
       rebuildSegment(root);
     }
+    snapRootToGuides(root);
     void delta;
   } else {
     root.position.copy(desiredPosition);
@@ -1797,6 +1902,7 @@ function applyProperties() {
     }
   }
 
+  applyShadowFlagsToRoot(root);
   updateAllCables(world);
   attachTransform();
   refreshSelectionHelpers();
@@ -1809,6 +1915,7 @@ function applyProperties() {
 function duplicateSelection() {
   if (!selectedRoots.size) return;
   const originals = [...selectedRoots];
+  const copies = [];
   clearSelection();
   for (const original of originals) {
     if (original.userData.kind === 'cable') continue;
@@ -1825,15 +1932,27 @@ function duplicateSelection() {
     const copy = createObjectFromData(data, world);
     if (copy) {
       world.add(copy);
+      copies.push(copy);
       selectedRoots.add(copy);
       selected = copy;
+    }
+  }
+  finalizeLoadedWorld(world);
+  for (const copy of copies) {
+    if (OPENING_KINDS.has(copy.userData.kind)) {
+      snapOpeningToWall(copy, world, copy.position, { maxDistance: 2.8, grid: settings.grid });
+    } else if (SEGMENT_KINDS.has(copy.userData.kind)) {
+      snapRootToGuides(copy);
+    } else {
+      snapRootToGuides(copy);
+      snapObjectToEnvironment(copy, { wall: true, surface: true, silent: true });
     }
   }
   finalizeLoadedWorld(world);
   attachTransform();
   refreshSelectionHelpers();
   syncPropertiesForm();
-  commitHistory('Objetos duplicados');
+  commitHistory('Objetos duplicados e alinhados');
 }
 
 function moveSelectedBy(dx, dz) {
@@ -1848,6 +1967,7 @@ function moveSelectedBy(dx, dz) {
       if (root.userData.kind === 'wall') rebuildWall(root, world);
       else if (root.userData.kind === 'glassWall') rebuildGlassWall(root);
       else rebuildSegment(root);
+      snapRootToGuides(root);
     } else {
       root.position.x += dx;
       root.position.z += dz;
@@ -2462,6 +2582,26 @@ transform.addEventListener('objectChange', () => {
     syncPropertiesForm();
   }
   updateAlignmentGuides(selected, { allowTranslateSnap: true });
+
+  // O encaixe acontece durante o arraste, e não apenas depois de soltar o mouse.
+  // Isso vale para mover e girar todos os objetos livres do construtor.
+  if (selected && transformStartState
+    && ['translate', 'rotate'].includes(transformStartState.mode)
+    && !SEGMENT_KINDS.has(selected.userData.kind)
+    && !OPENING_KINDS.has(selected.userData.kind)
+    && !environmentAdjusting) {
+    environmentAdjusting = true;
+    snapObjectToEnvironment(selected, {
+      wall: true,
+      surface: true,
+      silent: true,
+      surfaceTolerance: 0.34,
+      wallTolerance: 0.34,
+    });
+    environmentAdjusting = false;
+    syncPropertiesForm();
+  }
+
   showEnvironmentSnapHint(selected);
   refreshSelectionHelpers();
   updateAllCables(world);
@@ -2488,7 +2628,7 @@ transform.addEventListener('mouseUp', () => {
     }
     const resized = resizeObject(selected, nextDimensions, world);
     snapRootToGuides(selected);
-    snapObjectToEnvironment(selected, { wall: false, surface: true });
+    snapObjectToEnvironment(selected, { wall: true, surface: true });
     if (resized?.adjusted) setBuilderStatus('O tamanho foi ajustado automaticamente ao espaço livre da parede.');
   } else if (SEGMENT_KINDS.has(selected.userData.kind)) {
     applySegmentTransform(selected, transformStartState.segment, world);
@@ -2512,6 +2652,7 @@ transform.addEventListener('mouseUp', () => {
       surface: true,
     });
   }
+  applyShadowFlagsToRoot(selected);
   transformStartState = null;
   clearAlignmentGuides();
   updateAllCables(world);
@@ -3277,6 +3418,7 @@ function startGame() {
 function rebuildGameCaches() {
   staticCollisionBoxes = [];
   dynamicCollisionRoots = [];
+  stairCollisionRoots = [];
   interactionMeshes = [];
   walkableRoots = [];
   world.updateMatrixWorld(true);
@@ -3296,8 +3438,9 @@ function rebuildGameCaches() {
     if (kind === 'door' || kind === 'slidingGate') {
       dynamicCollisionRoots.push(root);
     } else if (kind === 'stairs') {
-      // A escada usa uma rampa física invisível. Os degraus continuam visuais,
-      // mas não criam quinas que prendem ou atravessam o personagem.
+      // Escadas usam colisores locais por degrau. Isso mantém a colisão correta
+      // mesmo quando a escada é girada e impede entrada pelas laterais/por baixo.
+      stairCollisionRoots.push(root);
     } else if (root.userData.collisionPieces?.length) {
       addCollisionPieces(root);
     } else if (staticKinds.has(kind)) {
@@ -3330,15 +3473,15 @@ function surfaceHeightForRoot(root, worldPosition) {
     const width = Number(dimensions.width) || 1.6;
     const height = Number(dimensions.height) || 1.62;
     const depth = Number(dimensions.depth) || 3.42;
-    const steps = Math.max(1, Number(root.userData.stairSteps) || root.children.filter((child) => child.isMesh).length || 9);
+    const steps = Math.max(2, Number(root.userData.stairSteps) || root.children.filter((child) => child.isMesh).length || 9);
     const stepDepth = depth / steps;
     const front = stepDepth / 2;
     const back = -depth + stepDepth / 2;
-    if (Math.abs(local.x) <= width / 2 + 0.04 && local.z <= front + 0.04 && local.z >= back - 0.04) {
-      // Rampa de colisão invisível: evita atravessar degraus durante quedas e
-      // deixa a subida estável mesmo com FPS baixo ou escada rotacionada.
-      const progress = THREE.MathUtils.clamp((front - local.z) / Math.max(0.001, front - back), 0, 1);
-      return root.position.y + progress * height;
+    if (Math.abs(local.x) <= width / 2 + 0.015 && local.z <= front + 0.015 && local.z >= back - 0.015) {
+      // A superfície física acompanha exatamente o topo de cada degrau.
+      // Assim o personagem não fica parcialmente dentro da geometria visual.
+      const index = THREE.MathUtils.clamp(Math.floor((front - local.z) / stepDepth + 1e-6), 0, steps - 1);
+      return root.position.y + ((index + 1) / steps) * height;
     }
   }
   return null;
@@ -3359,6 +3502,45 @@ function capsuleIntersectsBox(position, box, radius = 0.285) {
   // Uma pequena folga no topo permite pousar exatamente sobre a superfície.
   if (top <= box.min.y + 0.008 || bottom >= box.max.y - 0.008) return false;
   return footprintOverlapsBox(position, box, radius);
+}
+
+function circleIntersectsLocalRectangle(x, z, minX, maxX, minZ, maxZ, radius) {
+  const closestX = THREE.MathUtils.clamp(x, minX, maxX);
+  const closestZ = THREE.MathUtils.clamp(z, minZ, maxZ);
+  const dx = x - closestX;
+  const dz = z - closestZ;
+  return dx * dx + dz * dz <= radius * radius;
+}
+
+function capsuleIntersectsStairs(position, root, radius = 0.285) {
+  const dimensions = root.userData.dimensions || {};
+  const width = Number(dimensions.width) || 1.6;
+  const totalHeight = Number(dimensions.height) || 1.62;
+  const depth = Number(dimensions.depth) || 3.42;
+  const steps = Math.max(2, Number(root.userData.stairSteps) || 9);
+  const stepDepth = depth / steps;
+  const local = root.worldToLocal(position.clone());
+  const localFeet = position.y - 1.7 - root.position.y;
+  const capsuleBottom = localFeet + 0.075;
+  const capsuleTop = localFeet + 1.80;
+
+  // Cada degrau é um prisma sólido local. Fazer o teste no espaço local
+  // preserva a precisão quando a escada está rotacionada.
+  for (let index = 0; index < steps; index += 1) {
+    const stepTop = ((index + 1) / steps) * totalHeight;
+    if (capsuleTop <= 0.008 || capsuleBottom >= stepTop - 0.008) continue;
+    const centerZ = -index * stepDepth;
+    if (circleIntersectsLocalRectangle(
+      local.x,
+      local.z,
+      -width / 2,
+      width / 2,
+      centerZ - stepDepth / 2,
+      centerZ + stepDepth / 2,
+      radius,
+    )) return true;
+  }
+  return false;
 }
 
 function sweptLandingHeight(position, fromFeet, toFeet) {
@@ -3489,6 +3671,7 @@ function updatePlayerVertical(delta) {
 }
 
 function collides(position, ignoredVehicle = activeVehicle) {
+  for (const stairs of stairCollisionRoots) if (capsuleIntersectsStairs(position, stairs)) return true;
   for (const box of staticCollisionBoxes) if (capsuleIntersectsBox(position, box)) return true;
   for (const root of dynamicCollisionRoots) {
     if (root.userData.openProgress > 0.72 || !root.userData.movingPart) continue;
@@ -3981,25 +4164,32 @@ function animate() {
         const movement = direction.multiplyScalar(forward).add(right.multiplyScalar(side)).normalize().multiplyScalar(speed * delta);
         const feet = gameCamera.position.y - 1.7;
 
+        // Movimento horizontal em pequenos subpassos evita atravessar
+        // laterais de degraus, paredes finas ou objetos em quedas de FPS.
+        const substeps = Math.max(1, Math.ceil(movement.length() / 0.055));
+        const submovement = movement.clone().divideScalar(substeps);
+
         const tryAxis = (axis, amount) => {
           if (!amount) return;
+          const currentFeet = gameCamera.position.y - 1.7;
           const next = gameCamera.position.clone();
           next[axis] += amount;
-          const nextSupport = supportHeightAt(next, feet + 0.46);
-          const stepUp = nextSupport - feet;
+          const nextSupport = supportHeightAt(next, currentFeet + 0.46);
+          const stepUp = nextSupport - currentFeet;
           if (stepUp > 0.46) return;
           if (stepUp > 0.015) next.y = nextSupport + 1.7;
           if (collides(next)) return;
-          gameCamera.position[axis] = next[axis];
+          gameCamera.position.copy(next);
           if (stepUp > 0.015) {
-            gameCamera.position.y = next.y;
             verticalVelocity = 0;
             playerGrounded = true;
           }
         };
 
-        tryAxis('x', movement.x);
-        tryAxis('z', movement.z);
+        for (let stepIndex = 0; stepIndex < substeps; stepIndex += 1) {
+          tryAxis('x', submovement.x);
+          tryAxis('z', submovement.z);
+        }
       }
       recoverPlayerFromPenetration();
       updatePlayerVertical(delta);

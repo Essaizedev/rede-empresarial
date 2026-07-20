@@ -1,0 +1,11 @@
+VERSÃO 5.12 — COLISÃO PRECISA DAS ESCADAS
+
+- Escadas agora usam colisores locais individuais por degrau.
+- A colisão permanece correta após girar a escada.
+- Laterais, frente, traseira e parte inferior da escada são sólidas.
+- O topo físico acompanha exatamente cada degrau visual.
+- Movimento horizontal usa subpassos de até 5,5 cm para evitar atravessamento em FPS baixo.
+- Quedas continuam usando subpassos e detecção de pouso.
+- Recuperação automática remove o personagem de escadas antigas caso ele já esteja preso dentro delas.
+
+Não exige alterações no Supabase nem novo SQL.
