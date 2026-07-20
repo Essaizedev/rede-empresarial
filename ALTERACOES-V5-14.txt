@@ -1,0 +1,46 @@
+EMPRESA 3D INTELIGENTE — V5.14
+
+1. CORREÇÃO DO DEPLOY NA VERCEL
+- O package-lock.json antigo continha endereços internos do ambiente de desenvolvimento.
+- Todos os pacotes agora apontam para https://registry.npmjs.org/.
+- As versões de Three.js, Supabase e Vite foram fixadas para evitar mudanças inesperadas.
+- O installCommand agora usa npm ci, indicado para instalação limpa em implantação.
+- Node.js e npm foram fixados nas linhas 22.x e 10.x.
+
+2. PISO A PARTIR DE UMA PAREDE
+- Nova ferramenta "Piso pela parede".
+- Primeiro clique: escolha a parede de apoio.
+- O piso nasce automaticamente no topo da parede.
+- Mova o mouse para puxar o piso até o lado desejado.
+- Pontos amarelos mostram os cantos e a borda que está sendo puxada.
+- Quando encontra outra parede ou piso alinhado, os pontos ficam verdes.
+- Segundo clique: finaliza o piso com encaixe exato.
+- A largura acompanha exatamente o comprimento da parede inicial.
+
+3. COPIAR E COLAR
+- Botões Copiar e Colar na barra superior.
+- Atalhos Ctrl+C e Ctrl+V.
+- A cópia interna continua disponível após recarregar a página.
+- Pisos e tetos colados continuam no mesmo eixo e na mesma elevação.
+- Ao chegar perto da parede final, o último piso é reduzido automaticamente para preencher apenas o espaço restante.
+- Os limites ficam unidos sem frestas e sem sobreposição.
+
+4. FÍSICA DA ESCADA
+- A superfície da escada agora considera toda a cápsula do personagem, não apenas o ponto central dos pés.
+- Nove pontos ao redor do corpo verificam o degrau mais alto alcançado.
+- Toda a região abaixo do topo dos degraus é tratada como sólida.
+- Ao se aproximar pela frente, o personagem sobe para o topo do degrau.
+- Ao tentar entrar pela lateral ou por baixo, o movimento é bloqueado.
+- A correção funciona com escadas giradas e redimensionadas.
+
+ARQUIVOS ALTERADOS
+- src/main.js
+- src/objects.js
+- package.json
+- package-lock.json
+- vercel.json
+- .npmrc
+
+ATUALIZAÇÃO
+Substitua todos os arquivos acima, faça Commit changes e inicie um novo deploy sem cache na Vercel.
+Não é necessário executar SQL nem alterar o Supabase.

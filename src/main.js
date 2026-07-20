@@ -172,6 +172,8 @@ app.innerHTML = `
       <button id="soloTest" class="secondary">Testar cenário</button>
       <button id="undoAction" class="secondary" title="Desfazer (Ctrl+Z)">↶</button>
       <button id="redoAction" class="secondary" title="Refazer (Ctrl+Y)">↷</button>
+      <button id="copyObjects" class="secondary" title="Copiar seleção (Ctrl+C)">Copiar</button>
+      <button id="pasteObjects" class="secondary" title="Colar e alinhar (Ctrl+V)">Colar</button>
       <button id="saveProject" class="secondary">Salvar versão</button>
       <button id="newProject" class="secondary" title="Começar um projeto pessoal vazio">Novo projeto</button>
       <span class="private-draft-badge" title="Este rascunho fica somente neste navegador">🔒 Rascunho privado</span>
@@ -211,6 +213,7 @@ app.innerHTML = `
           <button data-add="window">Janela</button>
           <button data-add="slidingGate">Portão</button>
           <button data-add="floorSlab">Piso/Laje</button>
+          <button data-tool="floorFromWall">Piso pela parede</button>
           <button data-add="roof">Teto/Cobertura</button>
           <button data-add="stairs">Escada</button>
         </div>
@@ -284,7 +287,7 @@ app.innerHTML = `
             <label>Elevação<input id="floorElevationDefault" type="number" value="0" min="-2" max="30" step="0.05" /></label>
           </div>
           <div class="field"><label>Cor do piso<input id="floorColorDefault" type="color" value="#c9c6bb" /></label></div>
-          <p class="help-text">Para criar patamares e pavimentos, altere a elevação. A face superior será caminhável no teste.</p>
+          <p class="help-text">Para o térreo, use Piso/Laje. Para teto ou segundo andar, use Piso pela parede: clique na parede, puxe até a parede oposta e clique novamente.</p>
         </div>
         <div class="floor-defaults">
           <strong>Teto/Cobertura horizontal</strong>
@@ -1131,6 +1134,7 @@ let appMode = 'home';
 let builderView = 'top';
 let currentTool = 'select';
 let segmentStart = null;
+let floorWallDraft = null;
 let cableStart = null;
 let previewObject = null;
 let referencePlane = null;
@@ -1153,6 +1157,9 @@ let toastTimer = null;
 let interactionRoot = null;
 let canvasPointerStart = null;
 let canvasPointerMoved = false;
+let objectClipboard = [];
+let clipboardPasteRoots = [];
+const OBJECT_CLIPBOARD_KEY = 'empresa3d-object-clipboard-v1';
 const remotePlayers = new Map();
 const remotePlayerLastSeen = new Map();
 const presenceMissingSince = new Map();
@@ -1955,6 +1962,209 @@ function duplicateSelection() {
   commitHistory('Objetos duplicados e alinhados');
 }
 
+function copySelectionToClipboard() {
+  const roots = [...selectedRoots].filter((root) => root.userData.kind !== 'cable');
+  if (!roots.length) {
+    setBuilderStatus('Selecione pelo menos um objeto para copiar.');
+    return false;
+  }
+  objectClipboard = roots.map((root) => serializeObject(root));
+  clipboardPasteRoots = roots;
+  try {
+    localStorage.setItem(OBJECT_CLIPBOARD_KEY, JSON.stringify(objectClipboard));
+  } catch {
+    // A cópia continua disponível enquanto a página permanecer aberta.
+  }
+  setBuilderStatus(`${roots.length} objeto(s) copiado(s). Pressione Ctrl+V ou clique em Colar.`);
+  return true;
+}
+
+function clipboardData() {
+  if (objectClipboard.length) return structuredClone(objectClipboard);
+  try {
+    const saved = JSON.parse(localStorage.getItem(OBJECT_CLIPBOARD_KEY) || '[]');
+    if (Array.isArray(saved)) objectClipboard = saved;
+  } catch {
+    objectClipboard = [];
+  }
+  return structuredClone(objectClipboard);
+}
+
+function slabBoundaryDistanceFromEdge(base, sign, excluded = new Set()) {
+  const dimensions = getObjectDimensions(base);
+  const axes = slabAxes(base.rotation.y);
+  const center = new THREE.Vector2(base.position.x, base.position.z);
+  const halfWidth = Math.max(0.05, Number(dimensions.width) || 1) / 2;
+  const halfDepth = Math.max(0.05, Number(dimensions.depth) || 1) / 2;
+  const edge = center.clone().add(axes.normal.clone().multiplyScalar(sign * halfDepth));
+  let nearest = Infinity;
+
+  for (const candidate of world.children) {
+    if (candidate === base || excluded.has(candidate) || candidate.userData.hidden) continue;
+    const kind = candidate.userData.kind;
+
+    if (kind === 'wall') {
+      const info = getSegmentInfo(candidate);
+      if (!info || Math.abs(info.tangent.dot(axes.tangent)) < 0.985) continue;
+      const [minAlong, maxAlong] = projectedIntervalForSegment(info, center, axes.tangent);
+      if (intervalsOverlapAmount(-halfWidth, halfWidth, minAlong, maxAlong) < 0.10) continue;
+      const distance = info.center.clone().sub(edge).dot(axes.normal) * sign;
+      if (distance > 0.045) nearest = Math.min(nearest, distance);
+      continue;
+    }
+
+    if (!['floorSlab', 'roof'].includes(kind)) continue;
+    if (Math.abs((Number(candidate.position.y) || 0) - (Number(base.position.y) || 0)) > 0.28) continue;
+    const candidateDimensions = getObjectDimensions(candidate);
+    const candidateAxes = slabAxes(candidate.rotation.y);
+    if (Math.abs(candidateAxes.tangent.dot(axes.tangent)) < 0.985) continue;
+    const candidateCenter = new THREE.Vector2(candidate.position.x, candidate.position.z);
+    const along = candidateCenter.clone().sub(center).dot(axes.tangent);
+    const candidateHalfWidth = Math.max(0.05, Number(candidateDimensions.width) || 1) / 2;
+    if (intervalsOverlapAmount(-halfWidth, halfWidth, along - candidateHalfWidth, along + candidateHalfWidth) < 0.10) continue;
+    const candidateHalfDepth = Math.max(0.05, Number(candidateDimensions.depth) || 1) / 2;
+    for (const edgeSign of [-1, 1]) {
+      const candidateEdge = candidateCenter.clone().add(candidateAxes.normal.clone().multiplyScalar(edgeSign * candidateHalfDepth));
+      const distance = candidateEdge.clone().sub(edge).dot(axes.normal) * sign;
+      if (distance > 0.045) nearest = Math.min(nearest, distance);
+    }
+  }
+  return Number.isFinite(nearest) ? nearest : null;
+}
+
+function fitPastedSlabToRemainingGap(copy, base, preferredSign = 1) {
+  const copyDimensions = getObjectDimensions(copy);
+  const baseDimensions = getObjectDimensions(base);
+  const excluded = new Set([copy]);
+  let sign = Number(preferredSign) < 0 ? -1 : 1;
+  let boundary = slabBoundaryDistanceFromEdge(base, sign, excluded);
+
+  // Se o lado salvo estiver completamente fechado, tenta automaticamente o outro lado.
+  if (boundary != null && boundary < 0.11) {
+    const opposite = slabBoundaryDistanceFromEdge(base, -sign, excluded);
+    if (opposite == null || opposite >= 0.11) {
+      sign *= -1;
+      boundary = opposite;
+    }
+  }
+
+  const axes = slabAxes(base.rotation.y);
+  const baseCenter = new THREE.Vector2(base.position.x, base.position.z);
+  let depth = Math.max(0.12, Number(copyDimensions.depth) || 1);
+  const fitTolerance = Math.max(0.45, settings.grid * 2.2);
+  let fitted = false;
+
+  if (boundary != null && boundary <= depth + fitTolerance) {
+    depth = Math.max(0.12, boundary);
+    fitted = true;
+  }
+
+  const nextCenter = baseCenter.clone().add(
+    axes.normal.clone().multiplyScalar(sign * ((Number(baseDimensions.depth) || 1) / 2 + depth / 2)),
+  );
+  copy.position.set(nextCenter.x, base.position.y, nextCenter.y);
+  copy.rotation.copy(base.rotation);
+  copy.userData.floorGrowthSign = sign;
+  copy.userData.floorHostWallId = base.userData.floorHostWallId || '';
+  resizeObject(copy, {
+    width: Number(baseDimensions.width) || Number(copyDimensions.width) || 1,
+    height: Number(copyDimensions.height) || 0.14,
+    depth,
+  }, world);
+  copy.updateMatrixWorld(true);
+  return fitted;
+}
+
+function pasteClipboardSelection() {
+  const data = clipboardData().filter((item) => item?.kind !== 'cable');
+  if (!data.length) {
+    setBuilderStatus('A área de transferência do construtor está vazia.');
+    return;
+  }
+
+  const baseRoots = clipboardPasteRoots.length === data.length
+    ? clipboardPasteRoots
+    : data.map((item) => world.children.find((root) => root.userData.objectId === item.id) || null);
+  const newIdByOldId = new Map(data.map((item) => [item.id, crypto.randomUUID()]));
+  const createdByIndex = new Array(data.length).fill(null);
+  const creationOrder = data
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => Number(!SEGMENT_KINDS.has(a.item.kind)) - Number(!SEGMENT_KINDS.has(b.item.kind)));
+
+  for (const { item, index } of creationOrder) {
+    const copyData = structuredClone(item);
+    const base = baseRoots[index];
+    copyData.id = newIdByOldId.get(item.id);
+
+    if (copyData.hostWallId) {
+      copyData.hostWallId = newIdByOldId.get(copyData.hostWallId) || '';
+    }
+
+    if (copyData.segment) {
+      const baseData = base?.userData?.segment ? serializeObject(base) : item;
+      copyData.segment = structuredClone(baseData.segment || copyData.segment);
+      copyData.segment.start[0] += settings.grid * 2;
+      copyData.segment.start[1] += settings.grid * 2;
+      copyData.segment.end[0] += settings.grid * 2;
+      copyData.segment.end[1] += settings.grid * 2;
+    } else if (base) {
+      copyData.position = base.position.toArray();
+      copyData.rotation = [base.rotation.x, base.rotation.y, base.rotation.z];
+      copyData.position[0] += settings.grid * 2;
+      copyData.position[2] += settings.grid * 2;
+    } else {
+      copyData.position[0] += settings.grid * 2;
+      copyData.position[2] += settings.grid * 2;
+    }
+
+    const copy = createObjectFromData(copyData, world);
+    if (!copy) continue;
+    world.add(copy);
+    applyShadowFlagsToRoot(copy);
+    createdByIndex[index] = copy;
+  }
+
+  finalizeLoadedWorld(world);
+  let fittedCount = 0;
+
+  for (let index = 0; index < createdByIndex.length; index += 1) {
+    const copy = createdByIndex[index];
+    if (!copy) continue;
+    const base = baseRoots[index];
+
+    if (base && ['floorSlab', 'roof'].includes(copy.userData.kind) && ['floorSlab', 'roof'].includes(base.userData.kind)) {
+      const sign = Number(base.userData.floorGrowthSign || itemFloorGrowthSign(data[index])) || 1;
+      if (fitPastedSlabToRemainingGap(copy, base, sign)) fittedCount += 1;
+    } else if (OPENING_KINDS.has(copy.userData.kind)) {
+      snapOpeningToWall(copy, world, copy.position, { maxDistance: 3, grid: settings.grid });
+    } else if (SEGMENT_KINDS.has(copy.userData.kind)) {
+      snapRootToGuides(copy);
+    } else {
+      snapRootToGuides(copy);
+      snapObjectToEnvironment(copy, { wall: true, surface: true, silent: true });
+    }
+  }
+
+  finalizeLoadedWorld(world);
+  clearSelection();
+  for (const copy of createdByIndex.filter(Boolean)) selectedRoots.add(copy);
+  selected = createdByIndex.filter(Boolean).at(-1) || null;
+  clipboardPasteRoots = createdByIndex.filter(Boolean);
+  attachTransform();
+  refreshSelectionHelpers();
+  syncPropertiesForm();
+  updateAllCables(world);
+  commitHistory('Objetos colados e alinhados');
+  setBuilderStatus(fittedCount
+    ? `${clipboardPasteRoots.length} objeto(s) colado(s). ${fittedCount} piso(s) ajustado(s) exatamente ao espaço restante.`
+    : `${clipboardPasteRoots.length} objeto(s) colado(s) e alinhado(s).`);
+}
+
+function itemFloorGrowthSign(data) {
+  return Number(data?.floorGrowthSign) < 0 ? -1 : 1;
+}
+
+
 function moveSelectedBy(dx, dz) {
   if (!selectedRoots.size) return;
   for (const root of selectedRoots) {
@@ -2283,6 +2493,218 @@ function showSegmentPreview(start, end, kind, reason = '') {
   measurementBadge.classList.toggle('hidden', !settings.showMeasurements);
 }
 
+function wallTopElevation(wall) {
+  return (Number(wall?.position?.y) || 0) + Math.max(0.2, Number(wall?.userData?.segment?.height) || 3);
+}
+
+function slabAxes(rotationY) {
+  return {
+    tangent: new THREE.Vector2(Math.cos(rotationY), -Math.sin(rotationY)),
+    normal: new THREE.Vector2(Math.sin(rotationY), Math.cos(rotationY)),
+  };
+}
+
+function projectedIntervalForSegment(segmentInfo, origin, axis) {
+  const a = segmentInfo.a.clone().sub(origin).dot(axis);
+  const b = segmentInfo.b.clone().sub(origin).dot(axis);
+  return [Math.min(a, b), Math.max(a, b)];
+}
+
+function intervalsOverlapAmount(aMin, aMax, bMin, bMax) {
+  return Math.max(0, Math.min(aMax, bMax) - Math.max(aMin, bMin));
+}
+
+function floorPullBoundaryDistance(draft, sign) {
+  const { wall, info, elevation } = draft;
+  const origin = info.center;
+  const tangent = info.tangent;
+  const normal = info.normal;
+  const hostMin = -info.length / 2;
+  const hostMax = info.length / 2;
+  let nearest = Infinity;
+
+  for (const candidate of world.children) {
+    if (candidate === wall || candidate.userData.hidden) continue;
+    const kind = candidate.userData.kind;
+
+    if (kind === 'wall') {
+      const other = getSegmentInfo(candidate);
+      if (!other || Math.abs(other.tangent.dot(tangent)) < 0.985) continue;
+      const [otherMin, otherMax] = projectedIntervalForSegment(other, origin, tangent);
+      if (intervalsOverlapAmount(hostMin, hostMax, otherMin, otherMax) < 0.12) continue;
+      const signed = other.center.clone().sub(origin).dot(normal) * sign;
+      if (signed > 0.08) nearest = Math.min(nearest, signed);
+      continue;
+    }
+
+    if (!['floorSlab', 'roof'].includes(kind)) continue;
+    if (Math.abs((Number(candidate.position.y) || 0) - elevation) > 0.28) continue;
+    const dimensions = getObjectDimensions(candidate);
+    const axes = slabAxes(candidate.rotation.y);
+    if (Math.abs(axes.tangent.dot(tangent)) < 0.985) continue;
+    const center = new THREE.Vector2(candidate.position.x, candidate.position.z);
+    const along = center.clone().sub(origin).dot(tangent);
+    const halfWidth = Math.max(0.05, Number(dimensions.width) || 1) / 2;
+    if (intervalsOverlapAmount(hostMin, hostMax, along - halfWidth, along + halfWidth) < 0.12) continue;
+    const halfDepth = Math.max(0.05, Number(dimensions.depth) || 1) / 2;
+    for (const edgeSign of [-1, 1]) {
+      const edge = center.clone().add(axes.normal.clone().multiplyScalar(edgeSign * halfDepth));
+      const signed = edge.clone().sub(origin).dot(normal) * sign;
+      if (signed > 0.08) nearest = Math.min(nearest, signed);
+    }
+  }
+
+  return Number.isFinite(nearest) ? nearest : null;
+}
+
+function floorFromWallLayout(rawPoint) {
+  if (!floorWallDraft) return null;
+  const { info } = floorWallDraft;
+  const raw2 = new THREE.Vector2(rawPoint.x, rawPoint.z);
+  const signedRaw = raw2.clone().sub(info.center).dot(info.normal);
+  const sign = Math.sign(signedRaw) || floorWallDraft.lastSign || 1;
+  floorWallDraft.lastSign = sign;
+
+  let depth = Math.max(settings.grid, Math.abs(signedRaw));
+  depth = Math.max(settings.grid, Math.round(depth / settings.grid) * settings.grid);
+  const boundary = floorPullBoundaryDistance(floorWallDraft, sign);
+  const snapTolerance = Math.max(0.28, settings.grid * 1.7);
+  let snapped = false;
+  if (boundary != null && (depth >= boundary - snapTolerance || depth > boundary)) {
+    depth = Math.max(0.12, boundary);
+    snapped = true;
+  }
+
+  const center = info.center.clone().add(info.normal.clone().multiplyScalar(sign * depth / 2));
+  return {
+    wall: floorWallDraft.wall,
+    width: info.length,
+    depth,
+    height: settings.floorThickness,
+    elevation: floorWallDraft.elevation,
+    rotation: floorWallDraft.wall.rotation.y,
+    sign,
+    center,
+    snapped,
+  };
+}
+
+function showFloorFromWallPreview(layout) {
+  clearPreview();
+  if (!layout) return;
+
+  const group = new THREE.Group();
+  group.position.set(layout.center.x, layout.elevation, layout.center.y);
+  group.rotation.y = layout.rotation;
+  group.renderOrder = 40;
+
+  const slab = new THREE.Mesh(
+    new THREE.BoxGeometry(layout.width, layout.height, layout.depth),
+    new THREE.MeshBasicMaterial({
+      color: settings.floorColor,
+      transparent: true,
+      opacity: 0.55,
+      depthTest: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  slab.position.y = layout.height / 2;
+  slab.renderOrder = 40;
+  group.add(slab);
+
+  const y = layout.height + 0.055;
+  const corners = [
+    [-layout.width / 2, y, -layout.depth / 2],
+    [layout.width / 2, y, -layout.depth / 2],
+    [layout.width / 2, y, layout.depth / 2],
+    [-layout.width / 2, y, layout.depth / 2],
+  ];
+  const linePoints = [...corners, corners[0]].map(([x, py, z]) => new THREE.Vector3(x, py, z));
+  const outline = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(linePoints),
+    new THREE.LineBasicMaterial({ color: layout.snapped ? 0x55f0a6 : 0xffdf62, depthTest: false }),
+  );
+  outline.renderOrder = 44;
+  group.add(outline);
+
+  const handlePositions = [
+    ...corners,
+    [0, y + 0.01, layout.sign > 0 ? layout.depth / 2 : -layout.depth / 2],
+  ];
+  for (const [x, py, z] of handlePositions) {
+    const handle = new THREE.Mesh(
+      new THREE.SphereGeometry(0.105, 14, 10),
+      new THREE.MeshBasicMaterial({ color: layout.snapped ? 0x55f0a6 : 0xffdf62, depthTest: false }),
+    );
+    handle.position.set(x, py, z);
+    handle.renderOrder = 46;
+    group.add(handle);
+  }
+
+  previewObject = group;
+  previewLayer.add(group);
+  floorWallDraft.lastLayout = layout;
+  measurementBadge.textContent = `${layout.width.toFixed(2)} m × ${layout.depth.toFixed(2)} m · elevação ${layout.elevation.toFixed(2)} m${layout.snapped ? ' · encaixado exatamente no limite' : ''}`;
+  measurementBadge.classList.toggle('hidden', !settings.showMeasurements);
+}
+
+function beginFloorFromWall(wall) {
+  if (wall && OPENING_KINDS.has(wall.userData.kind)) {
+    wall = world.children.find((item) => item.userData.objectId === wall.userData.hostWallId) || wall;
+  }
+  if (!wall || wall.userData.kind !== 'wall') {
+    setBuilderStatus('Clique em uma parede para iniciar o piso ou a laje.');
+    return false;
+  }
+  const info = getSegmentInfo(wall);
+  if (!info) return false;
+  floorWallDraft = {
+    wall,
+    info,
+    elevation: wallTopElevation(wall),
+    lastSign: 1,
+    lastLayout: null,
+  };
+  const initialPoint = new THREE.Vector3(
+    info.center.x + info.normal.x,
+    0,
+    info.center.y + info.normal.y,
+  );
+  showFloorFromWallPreview(floorFromWallLayout(initialPoint));
+  setBuilderStatus('Piso iniciado no topo da parede. Mova o mouse para o lado desejado; a borda verde indica encaixe perfeito. Clique para finalizar.');
+  return true;
+}
+
+function finishFloorFromWall(rawPoint) {
+  const layout = floorFromWallLayout(rawPoint);
+  if (!layout || layout.depth < 0.12) {
+    setBuilderStatus('O piso ficou pequeno demais.');
+    return null;
+  }
+  const position = new THREE.Vector3(layout.center.x, layout.elevation, layout.center.y);
+  const root = createObject('floorSlab', position, {
+    width: layout.width,
+    depth: layout.depth,
+    height: layout.height,
+    color: settings.floorColor,
+  });
+  if (!root) return null;
+  root.rotation.y = layout.rotation;
+  root.userData.floorGrowthSign = layout.sign;
+  root.userData.floorHostWallId = layout.wall.userData.objectId;
+  world.add(root);
+  applyShadowFlagsToRoot(root);
+  selectOnly(root);
+  commitHistory('Piso criado a partir da parede');
+  refreshValidation();
+  setTool('select');
+  setBuilderStatus(layout.snapped
+    ? 'Piso criado e encaixado exatamente entre as paredes.'
+    : 'Piso criado no topo da parede. Use copiar e colar para continuar o pavimento.');
+  return root;
+}
+
+
 function updateBuilderControlBindings() {
   const enabled = appMode === 'builder' && !transform.dragging;
   const allowLeftCamera = currentTool === 'select';
@@ -2296,6 +2718,7 @@ function setTool(tool) {
   currentTool = tool;
   if (tool === 'windowSelect' && builderView !== 'top') setBuilderView('top');
   segmentStart = null;
+  floorWallDraft = null;
   cableStart = null;
   canvasPointerStart = null;
   canvasPointerMoved = false;
@@ -2305,6 +2728,7 @@ function setTool(tool) {
   if (tool === 'select') setBuilderStatus('Clique para selecionar. Arraste para mover a câmera. Shift + arraste cria uma seleção em área.');
   else if (tool === 'windowSelect') setBuilderStatus('Arraste um retângulo: esquerda→direita seleciona dentro; direita→esquerda também seleciona o que tocar.');
   else if (tool === 'paint') setBuilderStatus('Clique em uma parede para aplicar a cor escolhida. Se várias paredes estiverem selecionadas, todas serão pintadas.');
+  else if (tool === 'floorFromWall') setBuilderStatus('Clique na parede que sustentará o piso. Depois puxe até a parede oposta e clique novamente.');
   else if (['wall', 'glassWall', 'road', 'sidewalk'].includes(tool)) setBuilderStatus(`Clique no início e no final: ${objectLabel(tool)}. Use o botão direito para mover a câmera.`);
   else if (tool === 'cable') setBuilderStatus('Clique no primeiro e depois no segundo equipamento de rede.');
 }
@@ -2430,6 +2854,18 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
     return;
   }
 
+  if (currentTool === 'floorFromWall') {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!floorWallDraft) {
+      beginFloorFromWall(root);
+    } else {
+      const raw = groundPoint(event);
+      if (raw) finishFloorFromWall(raw);
+    }
+    return;
+  }
+
   if (['wall', 'glassWall', 'road', 'sidewalk'].includes(currentTool)) {
     const raw = groundPoint(event);
     if (!raw) return;
@@ -2517,7 +2953,13 @@ renderer.domElement.addEventListener('pointermove', (event) => {
     const distance = Math.hypot(event.clientX - canvasPointerStart.x, event.clientY - canvasPointerStart.y);
     if (distance > 5) canvasPointerMoved = true;
   }
-  if (appMode !== 'builder' || !segmentStart || !['wall', 'glassWall', 'road', 'sidewalk'].includes(currentTool)) return;
+  if (appMode !== 'builder') return;
+  if (currentTool === 'floorFromWall' && floorWallDraft) {
+    const raw = groundPoint(event);
+    if (raw) showFloorFromWallPreview(floorFromWallLayout(raw));
+    return;
+  }
+  if (!segmentStart || !['wall', 'glassWall', 'road', 'sidewalk'].includes(currentTool)) return;
   const raw = groundPoint(event);
   if (!raw) return;
   const snapped = smartSnapPoint(raw, segmentStart, currentTool);
@@ -3455,6 +3897,39 @@ function rebuildGameCaches() {
   }
 }
 
+function stairSurfaceHeight(root, worldPosition, radius = 0.285) {
+  const dimensions = root.userData.dimensions || {};
+  const width = Math.max(0.2, Number(dimensions.width) || 1.6);
+  const totalHeight = Math.max(0.2, Number(dimensions.height) || 1.62);
+  const depth = Math.max(0.2, Number(dimensions.depth) || 3.42);
+  const steps = Math.max(2, Number(root.userData.stairSteps) || 9);
+  const stepDepth = depth / steps;
+  const front = stepDepth / 2;
+  const back = -depth + stepDepth / 2;
+  const samples = [
+    [0, 0],
+    [radius, 0], [-radius, 0], [0, radius], [0, -radius],
+    [radius * 0.72, radius * 0.72],
+    [-radius * 0.72, radius * 0.72],
+    [radius * 0.72, -radius * 0.72],
+    [-radius * 0.72, -radius * 0.72],
+  ];
+  let best = null;
+
+  for (const [dx, dz] of samples) {
+    const sample = worldPosition.clone();
+    sample.x += dx;
+    sample.z += dz;
+    const local = root.worldToLocal(sample);
+    if (Math.abs(local.x) > width / 2 + 0.012 || local.z > front + 0.012 || local.z < back - 0.012) continue;
+    const index = THREE.MathUtils.clamp(Math.floor((front - local.z) / stepDepth + 1e-6), 0, steps - 1);
+    const localTop = ((index + 1) / steps) * totalHeight;
+    const worldTop = root.localToWorld(new THREE.Vector3(local.x, localTop, local.z)).y;
+    if (best == null || worldTop > best) best = worldTop;
+  }
+  return best;
+}
+
 function surfaceHeightForRoot(root, worldPosition) {
   const kind = root.userData.kind;
   const dimensions = root.userData.dimensions || {};
@@ -3465,24 +3940,14 @@ function surfaceHeightForRoot(root, worldPosition) {
     const depth = Number(dimensions.depth) || 4;
     const height = Number(dimensions.height) || 0.14;
     if (Math.abs(local.x) <= width / 2 + 0.02 && Math.abs(local.z) <= depth / 2 + 0.02) {
-      return root.position.y + height;
+      return root.localToWorld(new THREE.Vector3(local.x, height, local.z)).y;
     }
   }
 
   if (kind === 'stairs') {
-    const width = Number(dimensions.width) || 1.6;
-    const height = Number(dimensions.height) || 1.62;
-    const depth = Number(dimensions.depth) || 3.42;
-    const steps = Math.max(2, Number(root.userData.stairSteps) || root.children.filter((child) => child.isMesh).length || 9);
-    const stepDepth = depth / steps;
-    const front = stepDepth / 2;
-    const back = -depth + stepDepth / 2;
-    if (Math.abs(local.x) <= width / 2 + 0.015 && local.z <= front + 0.015 && local.z >= back - 0.015) {
-      // A superfície física acompanha exatamente o topo de cada degrau.
-      // Assim o personagem não fica parcialmente dentro da geometria visual.
-      const index = THREE.MathUtils.clamp(Math.floor((front - local.z) / stepDepth + 1e-6), 0, steps - 1);
-      return root.position.y + ((index + 1) / steps) * height;
-    }
+    // A altura considera toda a largura da cápsula do personagem. Assim a borda
+    // do corpo nunca entra primeiro no espelho do degrau antes do centro subir.
+    return stairSurfaceHeight(root, worldPosition, 0.285);
   }
   return null;
 }
@@ -3513,34 +3978,16 @@ function circleIntersectsLocalRectangle(x, z, minX, maxX, minZ, maxZ, radius) {
 }
 
 function capsuleIntersectsStairs(position, root, radius = 0.285) {
-  const dimensions = root.userData.dimensions || {};
-  const width = Number(dimensions.width) || 1.6;
-  const totalHeight = Number(dimensions.height) || 1.62;
-  const depth = Number(dimensions.depth) || 3.42;
-  const steps = Math.max(2, Number(root.userData.stairSteps) || 9);
-  const stepDepth = depth / steps;
-  const local = root.worldToLocal(position.clone());
-  const localFeet = position.y - 1.7 - root.position.y;
-  const capsuleBottom = localFeet + 0.075;
-  const capsuleTop = localFeet + 1.80;
+  const surface = stairSurfaceHeight(root, position, radius);
+  if (surface == null) return false;
+  const feet = position.y - 1.7;
+  const capsuleTop = feet + 1.80;
+  const base = root.localToWorld(new THREE.Vector3(0, 0, 0)).y;
 
-  // Cada degrau é um prisma sólido local. Fazer o teste no espaço local
-  // preserva a precisão quando a escada está rotacionada.
-  for (let index = 0; index < steps; index += 1) {
-    const stepTop = ((index + 1) / steps) * totalHeight;
-    if (capsuleTop <= 0.008 || capsuleBottom >= stepTop - 0.008) continue;
-    const centerZ = -index * stepDepth;
-    if (circleIntersectsLocalRectangle(
-      local.x,
-      local.z,
-      -width / 2,
-      width / 2,
-      centerZ - stepDepth / 2,
-      centerZ + stepDepth / 2,
-      radius,
-    )) return true;
-  }
-  return false;
+  // A escada é tratada como um sólido contínuo abaixo do topo de cada degrau.
+  // Se qualquer parte da cápsula alcançar o degrau, o personagem sobe para o
+  // topo ou é bloqueado; nunca permanece dentro da geometria.
+  return capsuleTop > base + 0.01 && feet < surface - 0.012;
 }
 
 function sweptLandingHeight(position, fromFeet, toFeet) {
@@ -3776,6 +4223,8 @@ $('#perspectiveView').addEventListener('click', () => setBuilderView('perspectiv
 $('#soloTest').addEventListener('click', startSoloGame);
 $('#undoAction').addEventListener('click', undo);
 $('#redoAction').addEventListener('click', redo);
+$('#copyObjects').addEventListener('click', copySelectionToClipboard);
+$('#pasteObjects').addEventListener('click', pasteClipboardSelection);
 $('#saveProject').addEventListener('click', saveLocalVersion);
 $('#newProject').addEventListener('click', () => {
   if (!confirm('Começar um projeto pessoal vazio? O projeto atual continuará disponível somente nas versões salvas ou no arquivo exportado.')) return;
@@ -4111,6 +4560,8 @@ addEventListener('keydown', (event) => {
     }
     else if ((event.ctrlKey || event.metaKey) && event.code === 'KeyZ') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
     else if ((event.ctrlKey || event.metaKey) && event.code === 'KeyY') { event.preventDefault(); redo(); }
+    else if ((event.ctrlKey || event.metaKey) && event.code === 'KeyC' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) { event.preventDefault(); copySelectionToClipboard(); }
+    else if ((event.ctrlKey || event.metaKey) && event.code === 'KeyV' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) { event.preventDefault(); pasteClipboardSelection(); }
     else if ((event.ctrlKey || event.metaKey) && event.code === 'KeyD') { event.preventDefault(); duplicateSelection(); }
     else if (event.code === 'Delete' || event.code === 'Backspace') { if (selectedRoots.size && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) removeRoots([...selectedRoots]); }
     else if (event.code === 'Escape') { setTool('select'); clearSelection(); }

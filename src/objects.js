@@ -1643,6 +1643,10 @@ export function serializeObject(root) {
     dimensions: root.userData.dimensions || null,
   };
   if (root.userData.segment) data.segment = structuredClone(root.userData.segment);
+  if (kind === 'floorSlab' || kind === 'roof') {
+    data.floorGrowthSign = Number(root.userData.floorGrowthSign) < 0 ? -1 : 1;
+    data.floorHostWallId = root.userData.floorHostWallId || '';
+  }
   if (OPENING_KINDS.has(kind)) {
     data.hostWallId = root.userData.hostWallId || '';
     data.hostOffset = Number(root.userData.hostOffset) || 0;
@@ -1710,6 +1714,10 @@ export function createObjectFromData(data, world = null) {
     if (data.kind === 'floorSlab') rebuildFloorSlab(root);
     if (data.kind === 'roof') rebuildRoof(root);
     if (data.kind === 'carport') rebuildCarport(root);
+  }
+  if (data.kind === 'floorSlab' || data.kind === 'roof') {
+    root.userData.floorGrowthSign = Number(data.floorGrowthSign) < 0 ? -1 : 1;
+    root.userData.floorHostWallId = data.floorHostWallId || '';
   }
   root.userData.meta = copyMeta(data.kind, data.meta);
   root.userData.locked = Boolean(data.locked);

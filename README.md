@@ -12,11 +12,13 @@ Aplicação Vite + Three.js + Supabase para construir uma empresa em 3D e explor
 - medida, ângulo, modo ortogonal (F8) e marcador visual de encaixe;
 - posição, rotação e dimensões editáveis numericamente;
 - seleção múltipla com Shift e seleção retangular no estilo CAD;
-- mover com as setas, duplicar, bloquear, apagar, desfazer e refazer;
+- mover com as setas, copiar, colar, duplicar, bloquear, apagar, desfazer e refazer;
 - versões locais, importação e exportação em JSON.
 
 ### Estrutura e área externa
 - paredes coloríveis com aberturas reais e portas sem frestas;
+- piso puxado a partir de uma parede, com pontos de controle e encaixe na parede oposta;
+- preenchimento automático do espaço restante ao copiar e colar pisos;
 - portas e janelas que se encaixam e procuram espaço livre automaticamente;
 - portão deslizante para estacionamento;
 - ruas com faixas, calçadas, vagas e áreas verdes;
@@ -77,6 +79,8 @@ O arquivo `vercel.json` já fixa o build correto.
 - F8: ativar/desativar modo ortogonal;
 - setas: mover pela grade;
 - Shift + setas: mover cinco passos;
+- Ctrl+C: copiar seleção;
+- Ctrl+V: colar e alinhar;
 - Ctrl+Z: desfazer;
 - Ctrl+Y: refazer;
 - Ctrl+D: duplicar;
